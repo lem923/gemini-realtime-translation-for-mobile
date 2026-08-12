@@ -19,8 +19,11 @@ void main() {
 
     expect(setup['model'], 'models/gemini-3.5-live-translate-preview');
     expect(generation['responseModalities'], <String>['AUDIO']);
-    expect(generation, contains('inputAudioTranscription'));
-    expect(generation, contains('outputAudioTranscription'));
+    expect(setup, contains('inputAudioTranscription'));
+    expect(setup, contains('outputAudioTranscription'));
+    expect(generation, isNot(contains('inputAudioTranscription')));
+    expect(generation, isNot(contains('outputAudioTranscription')));
+    expect(setup, isNot(contains('sessionResumption')));
     expect(translation['targetLanguageCode'], 'ja');
     expect(translation['echoTargetLanguage'], isFalse);
   });

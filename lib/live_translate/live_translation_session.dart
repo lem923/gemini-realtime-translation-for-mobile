@@ -33,6 +33,7 @@ class GeminiLiveSession implements LiveTranslationSession {
       StreamController<LiveEvent>.broadcast();
 
   IOWebSocketChannel? _channel;
+  HttpClient? _httpClient;
   // The subscription is cancelled on replacement and close.
   // ignore: cancel_subscriptions
   StreamSubscription<Object?>? _subscription;
@@ -84,12 +85,16 @@ class GeminiLiveSession implements LiveTranslationSession {
     if (_disposed || generation != _generation) {
       return;
     }
+    final HttpClient httpClient = HttpClient()
+      ..findProxy = _findProxyForWebSocket;
+    _httpClient = httpClient;
     final IOWebSocketChannel channel = IOWebSocketChannel.connect(
       Uri.parse(
         GeminiLiveProtocol.endpoint,
       ).replace(queryParameters: <String, String>{'key': apiKey}),
       pingInterval: const Duration(seconds: 20),
       connectTimeout: const Duration(seconds: 15),
+      customClient: httpClient,
     );
     _channel = channel;
     final Completer<void> setupCompleter = Completer<void>();
@@ -118,17 +123,40 @@ class GeminiLiveSession implements LiveTranslationSession {
       _reconnectAttempt = 0;
     } on TimeoutException {
       _emitFailure('连接 Gemini 超时，请检查网络后重试');
+      await _discardChannel(generation);
       rethrow;
     } on SocketException {
       _emitFailure('无法连接 Gemini，请检查网络');
+      await _discardChannel(generation);
       rethrow;
     } on WebSocketChannelException {
       _emitFailure('无法建立 Gemini Live 会话');
+      await _discardChannel(generation);
       rethrow;
     } catch (_) {
       _emitFailure('无法建立 Gemini Live 会话');
+      await _discardChannel(generation);
       rethrow;
     }
+  }
+
+  static String _findProxyForWebSocket(Uri uri) {
+    const String buildProxy = String.fromEnvironment('LIVE_PROXY');
+    if (buildProxy.isNotEmpty) {
+      return 'PROXY $buildProxy';
+    }
+    final Uri proxyLookupUri = uri.replace(
+      scheme: uri.scheme == 'wss' ? 'https' : 'http',
+    );
+    return HttpClient.findProxyFromEnvironment(proxyLookupUri);
+  }
+
+  Future<void> _discardChannel(int generation) async {
+    if (generation != _generation) {
+      return;
+    }
+    _generation += 1;
+    await _replaceChannel(_generation);
   }
 
   Future<void> _replaceChannel(int generation) async {
@@ -137,8 +165,10 @@ class GeminiLiveSession implements LiveTranslationSession {
     await subscription?.cancel();
     final IOWebSocketChannel? channel = _channel;
     _channel = null;
+    _httpClient?.close(force: true);
+    _httpClient = null;
     if (channel != null) {
-      await channel.sink.close(status.goingAway);
+      await channel.sink.close(status.goingAway).catchError((Object _) {});
     }
     if (generation == _generation) {
       _setupCompleter = null;
@@ -199,6 +229,7 @@ class GeminiLiveSession implements LiveTranslationSession {
       return;
     }
     _ready = false;
+    _failPendingSetup();
     _emitFailure('Gemini Live 连接中断，正在重连');
     _scheduleReconnect();
   }
@@ -208,6 +239,7 @@ class GeminiLiveSession implements LiveTranslationSession {
       return;
     }
     _ready = false;
+    _failPendingSetup();
     if (closeCode == status.policyViolation) {
       _events.add(
         const LiveSessionFailure(
@@ -218,6 +250,13 @@ class GeminiLiveSession implements LiveTranslationSession {
       return;
     }
     _scheduleReconnect();
+  }
+
+  void _failPendingSetup() {
+    final Completer<void>? completer = _setupCompleter;
+    if (completer != null && !completer.isCompleted) {
+      completer.completeError(StateError('Gemini session closed during setup'));
+    }
   }
 
   void _scheduleReconnect({bool immediate = false}) {
@@ -274,6 +313,8 @@ class GeminiLiveSession implements LiveTranslationSession {
     if (channel != null) {
       await channel.sink.close(status.normalClosure);
     }
+    _httpClient?.close(force: true);
+    _httpClient = null;
     _events.add(const LivePhaseChanged(LiveSessionPhase.closed));
     await _events.close();
   }
