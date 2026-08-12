@@ -9,7 +9,10 @@ enum ConversationPhase {
   idle,
   connecting,
   listening,
+  translating,
   reconnecting,
+  offline,
+  rateLimited,
   permissionDenied,
   failed,
 }

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
 import '../conversation/conversation_controller.dart';
+import '../preferences/language_pair_store.dart';
 import '../ui/conversation_page.dart';
 
 class RealtimeTranslationApp extends StatefulWidget {
@@ -19,7 +20,9 @@ class _RealtimeTranslationAppState extends State<RealtimeTranslationApp> {
   @override
   void initState() {
     super.initState();
-    _controller = ConversationController();
+    _controller = ConversationController(
+      languagePairStore: SharedPreferencesLanguagePairStore(),
+    );
     unawaited(_controller.initialize());
   }
 

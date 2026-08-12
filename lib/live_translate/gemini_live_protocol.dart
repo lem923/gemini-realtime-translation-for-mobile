@@ -100,6 +100,13 @@ class GeminiLiveProtocol {
           !quotaFailure &&
           !configurationFailure &&
           (code == null || code >= 500 || status == 'UNAVAILABLE');
+      final LiveFailureKind kind = authenticationFailure
+          ? LiveFailureKind.authentication
+          : quotaFailure
+          ? LiveFailureKind.rateLimited
+          : configurationFailure
+          ? LiveFailureKind.configuration
+          : LiveFailureKind.service;
       events.add(
         LiveSessionFailure(
           userMessage: authenticationFailure
@@ -111,6 +118,7 @@ class GeminiLiveProtocol {
               : 'Gemini Live 服务暂时不可用，正在重连',
           authenticationFailure: authenticationFailure,
           retryable: retryable,
+          kind: kind,
         ),
       );
     }

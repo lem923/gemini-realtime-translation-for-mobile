@@ -131,17 +131,29 @@ class GeminiLiveSession implements LiveTranslationSession {
       await setupFuture.timeout(const Duration(seconds: 15));
       _reconnectAttempt = 0;
     } on TimeoutException {
-      _emitFailure('连接 Gemini 超时，请检查网络后重试', retryable: _reconnectAttempt > 0);
+      _emitFailure(
+        '连接 Gemini 超时，请检查网络后重试',
+        retryable: _reconnectAttempt > 0,
+        kind: LiveFailureKind.offline,
+      );
       await _discardChannel(generation);
       _continueReconnectIfNeeded();
       rethrow;
     } on SocketException {
-      _emitFailure('无法连接 Gemini，请检查网络', retryable: _reconnectAttempt > 0);
+      _emitFailure(
+        '无法连接 Gemini，请检查网络',
+        retryable: _reconnectAttempt > 0,
+        kind: LiveFailureKind.offline,
+      );
       await _discardChannel(generation);
       _continueReconnectIfNeeded();
       rethrow;
     } on WebSocketChannelException {
-      _emitFailure('无法建立 Gemini Live 会话', retryable: _reconnectAttempt > 0);
+      _emitFailure(
+        '无法建立 Gemini Live 会话',
+        retryable: _reconnectAttempt > 0,
+        kind: LiveFailureKind.offline,
+      );
       await _discardChannel(generation);
       _continueReconnectIfNeeded();
       rethrow;
@@ -152,7 +164,11 @@ class GeminiLiveSession implements LiveTranslationSession {
       }
       rethrow;
     } catch (_) {
-      _emitFailure('无法建立 Gemini Live 会话', retryable: _reconnectAttempt > 0);
+      _emitFailure(
+        '无法建立 Gemini Live 会话',
+        retryable: _reconnectAttempt > 0,
+        kind: LiveFailureKind.service,
+      );
       await _discardChannel(generation);
       _continueReconnectIfNeeded();
       rethrow;
@@ -263,7 +279,11 @@ class GeminiLiveSession implements LiveTranslationSession {
     }
     _ready = false;
     _failPendingSetup();
-    _emitFailure('Gemini Live 连接中断，正在重连', retryable: true);
+    _emitFailure(
+      '网络连接中断，恢复后将自动重连',
+      retryable: true,
+      kind: LiveFailureKind.offline,
+    );
     _scheduleReconnect();
   }
 
@@ -277,6 +297,7 @@ class GeminiLiveSession implements LiveTranslationSession {
         userMessage: 'API Key、模型权限或会话配置无效',
         authenticationFailure: true,
         retryable: false,
+        kind: LiveFailureKind.authentication,
       );
       _failPendingSetup(
         const _SessionRejected(authenticationFailure: true, retryable: false),
@@ -307,6 +328,7 @@ class GeminiLiveSession implements LiveTranslationSession {
           userMessage: '多次重连失败，请停止后重新开始',
           authenticationFailure: false,
           retryable: false,
+          kind: LiveFailureKind.offline,
         ),
       );
       return;
@@ -321,12 +343,17 @@ class GeminiLiveSession implements LiveTranslationSession {
     });
   }
 
-  void _emitFailure(String message, {required bool retryable}) {
+  void _emitFailure(
+    String message, {
+    required bool retryable,
+    required LiveFailureKind kind,
+  }) {
     _events.add(
       LiveSessionFailure(
         userMessage: message,
         authenticationFailure: false,
         retryable: retryable,
+        kind: kind,
       ),
     );
   }

@@ -92,8 +92,10 @@ void main() {
     ).whereType<LiveSessionFailure>().single;
 
     expect(authentication.authenticationFailure, isTrue);
+    expect(authentication.kind, LiveFailureKind.authentication);
     expect(authentication.retryable, isFalse);
     expect(quota.authenticationFailure, isFalse);
+    expect(quota.kind, LiveFailureKind.rateLimited);
     expect(quota.retryable, isFalse);
     expect(quota.userMessage, contains('配额'));
   });
@@ -106,6 +108,7 @@ void main() {
     ).whereType<LiveSessionFailure>().single;
 
     expect(failure.authenticationFailure, isFalse);
+    expect(failure.kind, LiveFailureKind.service);
     expect(failure.retryable, isTrue);
     expect(failure.userMessage, contains('重连'));
   });

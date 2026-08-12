@@ -2,6 +2,15 @@ import 'dart:typed_data';
 
 enum LiveSessionPhase { connecting, ready, reconnecting, closed }
 
+enum LiveFailureKind {
+  authentication,
+  rateLimited,
+  offline,
+  configuration,
+  service,
+  unknown,
+}
+
 sealed class LiveEvent {
   const LiveEvent();
 }
@@ -50,9 +59,11 @@ class LiveSessionFailure extends LiveEvent {
     required this.userMessage,
     required this.authenticationFailure,
     required this.retryable,
+    this.kind = LiveFailureKind.unknown,
   });
 
   final String userMessage;
   final bool authenticationFailure;
   final bool retryable;
+  final LiveFailureKind kind;
 }

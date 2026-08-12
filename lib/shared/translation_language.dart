@@ -102,6 +102,10 @@ const List<TranslationLanguage> supportedLanguages = <TranslationLanguage>[
 ];
 
 TranslationLanguage languageByCode(String code) {
+  return tryLanguageByCode(code) ?? supportedLanguages.first;
+}
+
+TranslationLanguage? tryLanguageByCode(String code) {
   final String normalized = switch (code) {
     'nb' => 'no',
     'iw' => 'he',
@@ -109,8 +113,10 @@ TranslationLanguage languageByCode(String code) {
     'pt' => 'pt-BR',
     _ => code,
   };
-  return supportedLanguages.firstWhere(
-    (TranslationLanguage language) => language.code == normalized,
-    orElse: () => supportedLanguages.first,
-  );
+  for (final TranslationLanguage language in supportedLanguages) {
+    if (language.code == normalized) {
+      return language;
+    }
+  }
+  return null;
 }

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -9,7 +10,9 @@ import 'package:realtime_translation/conversation/conversation_diagnostics.dart'
 import 'package:realtime_translation/conversation/conversation_models.dart';
 import 'package:realtime_translation/live_translate/live_event.dart';
 import 'package:realtime_translation/live_translate/live_translation_session.dart';
+import 'package:realtime_translation/preferences/language_pair_store.dart';
 import 'package:realtime_translation/security/api_key_store.dart';
+import 'package:realtime_translation/shared/translation_language.dart';
 
 void main() {
   test('validates a key and persists it only when requested', () async {
@@ -46,6 +49,55 @@ void main() {
     controller.dispose();
   });
 
+  test('restores and persists only the last valid language pair', () async {
+    final _MemoryLanguagePairStore languageStore = _MemoryLanguagePairStore(
+      const StoredLanguagePair(languageA: 'ja', languageB: 'fr'),
+    );
+    final ConversationController controller = ConversationController(
+      keyStore: _MemoryKeyStore('stored-key'),
+      languagePairStore: languageStore,
+      audioCapture: _FakeAudioCapture(),
+      playback: _FakePlayback(),
+      sessionFactory:
+          ({required String apiKey, required String targetLanguageCode}) =>
+              _FakeLiveSession(),
+    );
+
+    await controller.initialize();
+    expect(controller.languageA.code, 'ja');
+    expect(controller.languageB.code, 'fr');
+
+    await controller.setLanguage(SpeakerSide.a, languageByCode('de'));
+    expect(languageStore.value?.languageA, 'de');
+    expect(languageStore.value?.languageB, 'fr');
+    await controller.swapLanguages();
+    expect(languageStore.value?.languageA, 'fr');
+    expect(languageStore.value?.languageB, 'de');
+    controller.dispose();
+  });
+
+  test('ignores corrupt, unsupported, or duplicate persisted pairs', () async {
+    for (final StoredLanguagePair pair in <StoredLanguagePair>[
+      const StoredLanguagePair(languageA: 'unknown', languageB: 'en'),
+      const StoredLanguagePair(languageA: 'en', languageB: 'en'),
+    ]) {
+      final ConversationController controller = ConversationController(
+        keyStore: _MemoryKeyStore('stored-key'),
+        languagePairStore: _MemoryLanguagePairStore(pair),
+        audioCapture: _FakeAudioCapture(),
+        playback: _FakePlayback(),
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) =>
+                _FakeLiveSession(),
+      );
+
+      await controller.initialize();
+      expect(controller.languageA.code, 'zh-Hans');
+      expect(controller.languageB.code, 'en');
+      controller.dispose();
+    }
+  });
+
   test(
     'reports denied microphone permission without opening a session',
     () async {
@@ -63,6 +115,70 @@ void main() {
       await controller.startConversation();
       expect(controller.phase, ConversationPhase.permissionDenied);
       expect(controller.errorMessage, contains('麦克风权限'));
+      expect(capture.started, isFalse);
+      controller.dispose();
+    },
+  );
+
+  test(
+    'initial network failure remains an explicit retryable offline state',
+    () async {
+      final _FakeAudioCapture capture = _FakeAudioCapture();
+      final ConversationController controller = ConversationController(
+        keyStore: _MemoryKeyStore('stored-key'),
+        audioCapture: capture,
+        playback: _FakePlayback(),
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) =>
+                _FakeLiveSession(
+                  connectError: const SocketException('offline'),
+                  connectFailureEvent: const LiveSessionFailure(
+                    userMessage: '无法连接 Gemini，请检查网络',
+                    authenticationFailure: false,
+                    retryable: false,
+                    kind: LiveFailureKind.offline,
+                  ),
+                ),
+      );
+
+      await controller.initialize();
+      await controller.startConversation();
+
+      expect(controller.phase, ConversationPhase.offline);
+      expect(controller.errorMessage, contains('网络'));
+      expect(controller.isBusy, isFalse);
+      expect(capture.started, isFalse);
+      controller.dispose();
+    },
+  );
+
+  test(
+    'connection throw cannot overwrite a preceding retryable offline event',
+    () async {
+      final _FakeAudioCapture capture = _FakeAudioCapture();
+      final ConversationController controller = ConversationController(
+        keyStore: _MemoryKeyStore('stored-key'),
+        audioCapture: capture,
+        playback: _FakePlayback(),
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) =>
+                _FakeLiveSession(
+                  connectError: const SocketException('reset after ready'),
+                  connectFailureEvent: const LiveSessionFailure(
+                    userMessage: '网络连接中断，恢复后将自动重连',
+                    authenticationFailure: false,
+                    retryable: true,
+                    kind: LiveFailureKind.offline,
+                  ),
+                ),
+      );
+
+      await controller.initialize();
+      await controller.startConversation();
+
+      expect(controller.phase, ConversationPhase.offline);
+      expect(controller.errorMessage, contains('网络连接中断'));
+      expect(controller.isBusy, isFalse);
       expect(capture.started, isFalse);
       controller.dispose();
     },
@@ -618,6 +734,8 @@ void main() {
     final Future<void> starting = controller.startConversation();
     await _flushEvents();
     expect(sessions, hasLength(1));
+    expect(controller.phase, ConversationPhase.connecting);
+    expect(controller.canStopConversation, isTrue);
     final Future<void> stopping = controller.stopConversation();
     connectGate.complete();
     await Future.wait(<Future<void>>[starting, stopping]);
@@ -739,6 +857,67 @@ void main() {
       expect(controller.errorMessage, '配额不足');
 
       await controller.stopConversation();
+      controller.dispose();
+    },
+  );
+
+  test(
+    'exposes translating, offline recovery, and rate-limit states',
+    () async {
+      final _FakeAudioCapture capture = _FakeAudioCapture();
+      final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
+      final ConversationController controller = ConversationController(
+        keyStore: _MemoryKeyStore('stored-key'),
+        audioCapture: capture,
+        playback: _FakePlayback(),
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) {
+              final _FakeLiveSession session = _FakeLiveSession();
+              sessions.add(session);
+              return session;
+            },
+      );
+
+      await controller.initialize();
+      await controller.startConversation();
+      sessions.first.emit(const LiveOutputTranscript('你好', 'zh-Hans'));
+      expect(controller.phase, ConversationPhase.translating);
+      expect(controller.isListening, isTrue);
+      sessions.first.emit(const LiveTurnComplete());
+      expect(controller.phase, ConversationPhase.listening);
+
+      sessions.first.emit(
+        const LiveSessionFailure(
+          userMessage: '网络连接中断，恢复后将自动重连',
+          authenticationFailure: false,
+          retryable: true,
+          kind: LiveFailureKind.offline,
+        ),
+      );
+      expect(controller.phase, ConversationPhase.offline);
+      expect(controller.isBusy, isTrue);
+      expect(controller.canStopConversation, isTrue);
+      sessions.first.emit(
+        const LivePhaseChanged(LiveSessionPhase.reconnecting),
+      );
+      expect(controller.phase, ConversationPhase.offline);
+      sessions.first.emit(const LivePhaseChanged(LiveSessionPhase.ready));
+      expect(controller.phase, ConversationPhase.listening);
+
+      sessions.first.emit(
+        const LiveSessionFailure(
+          userMessage: '配额不足',
+          authenticationFailure: false,
+          retryable: false,
+          kind: LiveFailureKind.rateLimited,
+        ),
+      );
+      expect(controller.phase, ConversationPhase.rateLimited);
+      await _flushEvents();
+      await _flushEvents();
+      expect(capture.stopped, isTrue);
+      expect(controller.isBusy, isFalse);
+      expect(controller.canStopConversation, isFalse);
       controller.dispose();
     },
   );
@@ -1027,6 +1206,20 @@ class _MemoryKeyStore implements ApiKeyStore {
   Future<void> write(String value) async => this.value = value;
 }
 
+class _MemoryLanguagePairStore implements LanguagePairStore {
+  _MemoryLanguagePairStore([this.value]);
+
+  StoredLanguagePair? value;
+
+  @override
+  Future<StoredLanguagePair?> read() async => value;
+
+  @override
+  Future<void> write(StoredLanguagePair pair) async {
+    value = pair;
+  }
+}
+
 class _FakeAudioCapture implements AudioCaptureGateway {
   _FakeAudioCapture({this.permission = true, this.startError});
 
@@ -1123,11 +1316,17 @@ class _FakePlayback implements PcmPlaybackGateway {
 }
 
 class _FakeLiveSession implements LiveTranslationSession {
-  _FakeLiveSession({this.connectGate, this.closeGate, this.connectError});
+  _FakeLiveSession({
+    this.connectGate,
+    this.closeGate,
+    this.connectError,
+    this.connectFailureEvent,
+  });
 
   final Completer<void>? connectGate;
   final Completer<void>? closeGate;
   final Object? connectError;
+  final LiveSessionFailure? connectFailureEvent;
   final StreamController<LiveEvent> _controller =
       StreamController<LiveEvent>.broadcast(sync: true);
   final List<List<int>> audio = <List<int>>[];
@@ -1146,6 +1345,10 @@ class _FakeLiveSession implements LiveTranslationSession {
   @override
   Future<void> connect() async {
     await connectGate?.future;
+    final LiveSessionFailure? failure = connectFailureEvent;
+    if (failure != null) {
+      _controller.add(failure);
+    }
     final Object? error = connectError;
     if (error != null) {
       throw error;

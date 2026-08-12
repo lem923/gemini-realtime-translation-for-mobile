@@ -9,6 +9,7 @@ import '../audio/audio_constants.dart';
 import '../audio/pcm_playback_gateway.dart';
 import '../live_translate/live_event.dart';
 import '../live_translate/live_translation_session.dart';
+import '../preferences/language_pair_store.dart';
 import '../security/api_key_store.dart';
 import '../shared/translation_language.dart';
 import 'conversation_diagnostics.dart';
@@ -19,11 +20,14 @@ class ConversationController extends ChangeNotifier {
     ApiKeyStore? keyStore,
     AudioCaptureGateway? audioCapture,
     PcmPlaybackGateway? playback,
+    LanguagePairStore? languagePairStore,
     LiveSessionFactory? sessionFactory,
     int Function()? monotonicMicros,
   }) : _keyStore = keyStore ?? SecureApiKeyStore(),
        _audioCapture = audioCapture ?? RecordAudioCaptureGateway(),
        _playback = playback ?? PlatformPcmPlaybackGateway(),
+       _languagePairStore =
+           languagePairStore ?? const DisabledLanguagePairStore(),
        _monotonicMicros = monotonicMicros ?? _createMonotonicClock(),
        _sessionFactory =
            sessionFactory ??
@@ -36,6 +40,7 @@ class ConversationController extends ChangeNotifier {
   final ApiKeyStore _keyStore;
   final AudioCaptureGateway _audioCapture;
   final PcmPlaybackGateway _playback;
+  final LanguagePairStore _languagePairStore;
   final LiveSessionFactory _sessionFactory;
   final int Function() _monotonicMicros;
   final Map<SpeakerSide, LiveTranslationSession> _sessions =
@@ -120,10 +125,20 @@ class ConversationController extends ChangeNotifier {
   bool get rememberKey => _rememberKey;
   bool get audioMuted => _audioMuted;
   int? get replayingTurnId => _replayingTurnId;
-  bool get isListening => _phase == ConversationPhase.listening;
+  bool get isListening =>
+      _phase == ConversationPhase.listening ||
+      _phase == ConversationPhase.translating;
+  bool get canStopConversation =>
+      _stopOperation == null &&
+      (isListening ||
+          _phase == ConversationPhase.connecting ||
+          _phase == ConversationPhase.reconnecting ||
+          (_phase == ConversationPhase.offline &&
+              _captureSubscription != null));
   bool get isBusy =>
       _phase == ConversationPhase.connecting ||
       _phase == ConversationPhase.reconnecting ||
+      (_phase == ConversationPhase.offline && _captureSubscription != null) ||
       _replayingTurnId != null ||
       _stopOperation != null;
   ConversationPhase get phase => _phase;
@@ -148,7 +163,29 @@ class ConversationController extends ChangeNotifier {
       _handlePlaybackEvent,
       onError: (Object _) {},
     );
-    final String? stored = await _keyStore.read();
+    StoredLanguagePair? storedPair;
+    try {
+      storedPair = await _languagePairStore.read();
+    } catch (_) {
+      // A corrupt/unavailable non-sensitive preference must never prevent the
+      // translator from starting with its safe default pair.
+    }
+    final TranslationLanguage? storedA = storedPair == null
+        ? null
+        : tryLanguageByCode(storedPair.languageA);
+    final TranslationLanguage? storedB = storedPair == null
+        ? null
+        : tryLanguageByCode(storedPair.languageB);
+    if (storedA != null && storedB != null && storedA.code != storedB.code) {
+      _languageA = storedA;
+      _languageB = storedB;
+    }
+    String? stored;
+    try {
+      stored = await _keyStore.read();
+    } catch (_) {
+      _errorMessage = '无法读取已保存的 API Key，请重新输入';
+    }
     if (_disposed) {
       return;
     }
@@ -281,8 +318,18 @@ class ConversationController extends ChangeNotifier {
       if (!_isCurrentConversation(generation)) {
         return;
       }
+      final Future<void>? stopping = _stopOperation;
+      if (stopping != null) {
+        await stopping;
+        return;
+      }
       final String message = _errorMessage ?? '无法启动翻译，请检查网络和 API Key';
-      _terminateConversation(message);
+      final ConversationPhase failurePhase = switch (_phase) {
+        ConversationPhase.offline => ConversationPhase.offline,
+        ConversationPhase.rateLimited => ConversationPhase.rateLimited,
+        _ => ConversationPhase.failed,
+      };
+      _terminateConversation(message, phase: failurePhase);
       await _stopOperation;
     }
   }
@@ -342,6 +389,7 @@ class ConversationController extends ChangeNotifier {
         }
       case LiveOutputTranscript(:final String text):
         if (side == _activeSpeaker) {
+          _markTranslating();
           _firstTranslatedTextMilliseconds ??=
               _elapsedFromFirstSendMilliseconds();
         }
@@ -351,6 +399,7 @@ class ConversationController extends ChangeNotifier {
         }
       case LiveAudioChunk(:final Uint8List bytes):
         if (side == _activeSpeaker) {
+          final bool phaseChanged = _markTranslating();
           _cacheTurnAudio(side, bytes);
           _firstTranslatedAudioMilliseconds ??=
               _elapsedFromFirstSendMilliseconds();
@@ -365,9 +414,18 @@ class ConversationController extends ChangeNotifier {
             }
             _queuePlayback(bytes);
           }
+          if (phaseChanged) {
+            notifyListeners();
+          }
         }
       case LiveTurnComplete():
         _commitTurn(side);
+        if (side == _activeSpeaker &&
+            _captureSubscription != null &&
+            _phase == ConversationPhase.translating) {
+          _phase = ConversationPhase.listening;
+          notifyListeners();
+        }
       case LiveInterrupted():
         if (side == _activeSpeaker) {
           _discardTurnAudio(side);
@@ -376,6 +434,10 @@ class ConversationController extends ChangeNotifier {
           } else {
             unawaited(_flushPlayback());
           }
+          if (_captureSubscription != null) {
+            _phase = ConversationPhase.listening;
+            notifyListeners();
+          }
         }
       case LivePhaseChanged(:final LiveSessionPhase phase):
         if (side != _activeSpeaker) {
@@ -383,7 +445,9 @@ class ConversationController extends ChangeNotifier {
         }
         if (phase == LiveSessionPhase.reconnecting) {
           _reconnectEvents += 1;
-          _phase = ConversationPhase.reconnecting;
+          if (_phase != ConversationPhase.offline) {
+            _phase = ConversationPhase.reconnecting;
+          }
         } else if (phase == LiveSessionPhase.ready &&
             _captureSubscription != null) {
           _phase = ConversationPhase.listening;
@@ -394,20 +458,36 @@ class ConversationController extends ChangeNotifier {
         :final String userMessage,
         :final bool authenticationFailure,
         :final bool retryable,
+        :final LiveFailureKind kind,
       ):
         if (side == _activeSpeaker) {
           _sessionFailures += 1;
           if (authenticationFailure || !retryable) {
-            _terminateConversation(userMessage);
+            final ConversationPhase terminalPhase = switch (kind) {
+              LiveFailureKind.rateLimited => ConversationPhase.rateLimited,
+              LiveFailureKind.offline => ConversationPhase.offline,
+              _ => ConversationPhase.failed,
+            };
+            _terminateConversation(userMessage, phase: terminalPhase);
           } else {
             _errorMessage = userMessage;
-            _phase = ConversationPhase.reconnecting;
+            _phase = kind == LiveFailureKind.offline
+                ? ConversationPhase.offline
+                : ConversationPhase.reconnecting;
             notifyListeners();
           }
         }
       case LiveResumptionHandle() || LiveGoAway():
         break;
     }
+  }
+
+  bool _markTranslating() {
+    if (_captureSubscription != null && _phase == ConversationPhase.listening) {
+      _phase = ConversationPhase.translating;
+      return true;
+    }
+    return false;
   }
 
   void _queuePlayback(Uint8List bytes) {
@@ -642,6 +722,7 @@ class ConversationController extends ChangeNotifier {
       }
       _languageB = language;
     }
+    await _persistLanguagePair();
     notifyListeners();
   }
 
@@ -650,7 +731,21 @@ class ConversationController extends ChangeNotifier {
     final TranslationLanguage oldA = _languageA;
     _languageA = _languageB;
     _languageB = oldA;
+    await _persistLanguagePair();
     notifyListeners();
+  }
+
+  Future<void> _persistLanguagePair() async {
+    try {
+      await _languagePairStore.write(
+        StoredLanguagePair(
+          languageA: _languageA.code,
+          languageB: _languageB.code,
+        ),
+      );
+    } catch (_) {
+      _errorMessage = '语言已切换，但未能保存为下次默认值';
+    }
   }
 
   void toggleAudioMuted() {
@@ -878,11 +973,14 @@ class ConversationController extends ChangeNotifier {
     }
   }
 
-  void _terminateConversation(String message) {
+  void _terminateConversation(
+    String message, {
+    ConversationPhase phase = ConversationPhase.failed,
+  }) {
     if (_disposed) {
       return;
     }
-    _phase = ConversationPhase.failed;
+    _phase = phase;
     _errorMessage = message;
     if (_diagnosticStartedMicros != null) {
       _diagnosticStoppedMicros ??= _monotonicMicros();
@@ -891,7 +989,7 @@ class ConversationController extends ChangeNotifier {
     unawaited(
       _stopConversationWithOutcome(
         preserveError: true,
-        finalPhase: ConversationPhase.failed,
+        finalPhase: phase,
         finalError: message,
       ),
     );
