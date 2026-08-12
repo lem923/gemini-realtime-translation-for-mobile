@@ -812,38 +812,52 @@ class _FaceHalf extends StatelessWidget {
           : colors.surfaceContainerLow,
       borderRadius: BorderRadius.circular(28),
       clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: () => unawaited(controller.selectSpeaker(side)),
-        child: Padding(
-          padding: const EdgeInsets.all(22),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: <Widget>[
-              Text(language.flag, style: const TextStyle(fontSize: 36)),
-              const SizedBox(height: 8),
-              Text(
-                language.name,
-                style: TextStyle(color: accent, fontWeight: FontWeight.w800),
+      child: LayoutBuilder(
+        builder: (BuildContext context, BoxConstraints constraints) {
+          final bool compact = constraints.maxHeight < 240;
+          final double gap = compact ? 4 : 12;
+          return InkWell(
+            onTap: () => unawaited(controller.selectSpeaker(side)),
+            child: Padding(
+              padding: EdgeInsets.all(compact ? 8 : 22),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: <Widget>[
+                  Text(
+                    language.flag,
+                    style: TextStyle(fontSize: compact ? 28 : 36),
+                  ),
+                  SizedBox(height: compact ? 2 : 8),
+                  Text(
+                    language.name,
+                    style: TextStyle(
+                      color: accent,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  SizedBox(height: gap),
+                  Icon(
+                    selected ? Icons.mic_rounded : Icons.touch_app_outlined,
+                    color: accent,
+                    size: compact ? 24 : 32,
+                  ),
+                  SizedBox(height: gap),
+                  Text(
+                    text,
+                    maxLines: compact ? 2 : 4,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                    style:
+                        (compact
+                                ? Theme.of(context).textTheme.titleMedium
+                                : Theme.of(context).textTheme.titleLarge)
+                            ?.copyWith(fontWeight: FontWeight.w700),
+                  ),
+                ],
               ),
-              const SizedBox(height: 12),
-              Icon(
-                selected ? Icons.mic_rounded : Icons.touch_app_outlined,
-                color: accent,
-                size: 32,
-              ),
-              const SizedBox(height: 12),
-              Text(
-                text,
-                maxLines: 4,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.center,
-                style: Theme.of(
-                  context,
-                ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
-              ),
-            ],
-          ),
-        ),
+            ),
+          );
+        },
       ),
     );
   }
