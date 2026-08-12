@@ -7,6 +7,12 @@ import '../conversation/conversation_controller.dart';
 import '../conversation/conversation_models.dart';
 import '../shared/translation_language.dart';
 
+@visibleForTesting
+bool stopsConversationForLifecycleState(AppLifecycleState state) =>
+    state == AppLifecycleState.hidden ||
+    state == AppLifecycleState.paused ||
+    state == AppLifecycleState.detached;
+
 class ConversationPage extends StatefulWidget {
   const ConversationPage({required this.controller, super.key});
 
@@ -28,10 +34,9 @@ class _ConversationPageState extends State<ConversationPage>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.inactive ||
-        state == AppLifecycleState.hidden ||
-        state == AppLifecycleState.paused ||
-        state == AppLifecycleState.detached) {
+    // Permission prompts and other temporary system overlays emit `inactive`.
+    // Stopping there cancels the very microphone request that starts a session.
+    if (stopsConversationForLifecycleState(state)) {
       unawaited(widget.controller.stopConversation());
     }
   }

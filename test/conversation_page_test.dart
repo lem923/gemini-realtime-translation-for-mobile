@@ -54,6 +54,29 @@ void main() {
 
     controller.dispose();
   });
+
+  test('permission overlays stay active while background states stop', () {
+    expect(
+      stopsConversationForLifecycleState(AppLifecycleState.inactive),
+      isFalse,
+    );
+    expect(
+      stopsConversationForLifecycleState(AppLifecycleState.resumed),
+      isFalse,
+    );
+    expect(
+      stopsConversationForLifecycleState(AppLifecycleState.hidden),
+      isTrue,
+    );
+    expect(
+      stopsConversationForLifecycleState(AppLifecycleState.paused),
+      isTrue,
+    );
+    expect(
+      stopsConversationForLifecycleState(AppLifecycleState.detached),
+      isTrue,
+    );
+  });
 }
 
 class _StoredKeyStore implements ApiKeyStore {
