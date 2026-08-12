@@ -48,6 +48,7 @@ class MainActivity : FlutterActivity() {
                         pcmPlayer.flush()
                         result.success(null)
                     }
+                    "metrics" -> result.success(pcmPlayer.metrics())
                     "dispose" -> {
                         pcmPlayer.dispose()
                         result.success(null)
@@ -69,13 +70,17 @@ class MainActivity : FlutterActivity() {
 
 private class PcmStreamPlayer(context: Context) {
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-    private val queue = ArrayBlockingQueue<ByteArray>(32)
+    private val queue = ArrayBlockingQueue<ByteArray>(64)
+    private val queueLock = Any()
     private val lifecycleLock = Any()
     private val writeLock = Any()
     private var audioTrack: AudioTrack? = null
     private var worker: Thread? = null
     private var running = false
     private var focusRequest: AudioFocusRequest? = null
+    private var maxQueuedBytes = 72_000
+    private var queuedBytes = 0
+    private var droppedChunks = 0L
 
     fun configure(sampleRate: Int) = synchronized(lifecycleLock) {
         disposeLocked()
@@ -101,8 +106,13 @@ private class PcmStreamPlayer(context: Context) {
             builder.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
         }
         val track = builder.build()
+        check(track.state == AudioTrack.STATE_INITIALIZED) {
+            "AudioTrack failed to initialize"
+        }
         audioTrack = track
-        queue.clear()
+        maxQueuedBytes = sampleRate * 2 * MAX_QUEUE_MILLISECONDS / 1_000
+        droppedChunks = 0
+        clearQueue()
         requestAudioFocus(attributes)
         routeToSpeaker()
         running = true
@@ -111,9 +121,25 @@ private class PcmStreamPlayer(context: Context) {
             while (running) {
                 val bytes = queue.poll(250, TimeUnit.MILLISECONDS) ?: continue
                 if (bytes.isEmpty()) continue
+                synchronized(queueLock) {
+                    queuedBytes = (queuedBytes - bytes.size).coerceAtLeast(0)
+                }
                 synchronized(writeLock) {
                     if (running && track.playState == AudioTrack.PLAYSTATE_PLAYING) {
-                        track.write(bytes, 0, bytes.size, AudioTrack.WRITE_BLOCKING)
+                        var offset = 0
+                        while (running && offset < bytes.size) {
+                            val written = track.write(
+                                bytes,
+                                offset,
+                                bytes.size - offset,
+                                AudioTrack.WRITE_BLOCKING,
+                            )
+                            if (written <= 0) {
+                                if (written < 0) running = false
+                                break
+                            }
+                            offset += written
+                        }
                     }
                 }
             }
@@ -123,14 +149,26 @@ private class PcmStreamPlayer(context: Context) {
     fun enqueue(bytes: ByteArray) {
         if (!running || bytes.isEmpty()) return
         val copy = bytes.copyOf()
-        if (!queue.offer(copy)) {
-            queue.poll()
-            queue.offer(copy)
+        synchronized(queueLock) {
+            if (copy.size > maxQueuedBytes) {
+                droppedChunks += 1
+                return
+            }
+            while (queuedBytes + copy.size > maxQueuedBytes || queue.remainingCapacity() == 0) {
+                val dropped = queue.poll() ?: break
+                queuedBytes = (queuedBytes - dropped.size).coerceAtLeast(0)
+                droppedChunks += 1
+            }
+            if (queue.offer(copy)) {
+                queuedBytes += copy.size
+            } else {
+                droppedChunks += 1
+            }
         }
     }
 
     fun flush() {
-        queue.clear()
+        clearQueue()
         synchronized(writeLock) {
             val track = audioTrack ?: return
             if (track.state == AudioTrack.STATE_INITIALIZED) {
@@ -141,13 +179,21 @@ private class PcmStreamPlayer(context: Context) {
         }
     }
 
+    fun metrics(): Map<String, Any> = synchronized(queueLock) {
+        mapOf(
+            "queuedBytes" to queuedBytes,
+            "maxQueuedBytes" to maxQueuedBytes,
+            "droppedChunks" to droppedChunks,
+        )
+    }
+
     fun dispose() = synchronized(lifecycleLock) {
         disposeLocked()
     }
 
     private fun disposeLocked() {
         running = false
-        queue.clear()
+        clearQueue()
         queue.offer(ByteArray(0))
         worker?.join(500)
         worker = null
@@ -184,7 +230,13 @@ private class PcmStreamPlayer(context: Context) {
             val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
                 .setAudioAttributes(attributes)
                 .setAcceptsDelayedFocusGain(false)
-                .setOnAudioFocusChangeListener { }
+                .setOnAudioFocusChangeListener { change ->
+                    if (change == AudioManager.AUDIOFOCUS_LOSS ||
+                        change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT
+                    ) {
+                        flush()
+                    }
+                }
                 .build()
             focusRequest = request
             audioManager.requestAudioFocus(request)
@@ -208,5 +260,14 @@ private class PcmStreamPlayer(context: Context) {
             @Suppress("DEPRECATION")
             audioManager.isSpeakerphoneOn = true
         }
+    }
+
+    private fun clearQueue() = synchronized(queueLock) {
+        queue.clear()
+        queuedBytes = 0
+    }
+
+    companion object {
+        private const val MAX_QUEUE_MILLISECONDS = 1_500
     }
 }
