@@ -209,7 +209,11 @@ class GeminiLiveSession implements LiveTranslationSession {
     _httpClient?.close(force: true);
     _httpClient = null;
     if (channel != null) {
-      await channel.sink.close(status.goingAway).catchError((Object _) {});
+      // `dart:io` does not allow a client to send the server-only 1001
+      // Going Away code. A Gemini connection can itself finish with 1001;
+      // normalise our local replacement close to 1000 so reconnect remains
+      // valid even when the old channel has already observed that server code.
+      await channel.sink.close(status.normalClosure).catchError((Object _) {});
     }
     if (generation == _generation) {
       _setupCompleter = null;
