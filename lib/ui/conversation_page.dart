@@ -881,14 +881,30 @@ class _FaceToFaceView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final ConversationTurn? latestTurn = controller.latestActiveTurn;
+    final bool hasInterim = controller.hasInterimTranscript;
+    final String visibleSource = hasInterim
+        ? controller.interimSource
+        : latestTurn?.sourceText ?? '';
+    final String visibleTranslation = hasInterim
+        ? controller.interimTranslation
+        : latestTurn?.translatedText ?? '';
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
       child: Column(
         children: <Widget>[
           Expanded(
-            child: Transform.rotate(
-              angle: math.pi,
-              child: _FaceHalf(controller: controller, side: SpeakerSide.b),
+            child: SizedBox(
+              width: double.infinity,
+              child: Transform.rotate(
+                angle: math.pi,
+                child: _FaceHalf(
+                  controller: controller,
+                  side: SpeakerSide.b,
+                  visibleSource: visibleSource,
+                  visibleTranslation: visibleTranslation,
+                ),
+              ),
             ),
           ),
           Padding(
@@ -900,7 +916,15 @@ class _FaceToFaceView extends StatelessWidget {
             ),
           ),
           Expanded(
-            child: _FaceHalf(controller: controller, side: SpeakerSide.a),
+            child: SizedBox(
+              width: double.infinity,
+              child: _FaceHalf(
+                controller: controller,
+                side: SpeakerSide.a,
+                visibleSource: visibleSource,
+                visibleTranslation: visibleTranslation,
+              ),
+            ),
           ),
         ],
       ),
@@ -909,9 +933,16 @@ class _FaceToFaceView extends StatelessWidget {
 }
 
 class _FaceHalf extends StatelessWidget {
-  const _FaceHalf({required this.controller, required this.side});
+  const _FaceHalf({
+    required this.controller,
+    required this.side,
+    required this.visibleSource,
+    required this.visibleTranslation,
+  });
   final ConversationController controller;
   final SpeakerSide side;
+  final String visibleSource;
+  final String visibleTranslation;
 
   @override
   Widget build(BuildContext context) {
@@ -923,16 +954,31 @@ class _FaceHalf extends StatelessWidget {
     final Color accent = side == SpeakerSide.a
         ? colors.primary
         : colors.tertiary;
-    final String text = selected && controller.interimTranslation.isNotEmpty
-        ? controller.interimTranslation
-        : '点击这里，让 ${language.name} 讲话';
+    final bool hasConversationText =
+        visibleSource.isNotEmpty || visibleTranslation.isNotEmpty;
+    final String role = selected ? '讲话' : '译文';
+    final String text = selected
+        ? visibleSource.isNotEmpty
+              ? visibleSource
+              : hasConversationText
+              ? '正在识别…'
+              : '点击这里，用 ${language.name} 讲话'
+        : visibleTranslation.isNotEmpty
+        ? visibleTranslation
+        : hasConversationText
+        ? '正在翻译…'
+        : '等待 ${language.name} 译文';
+    void selectSpeaker() => unawaited(controller.selectSpeaker(side));
     return Semantics(
       button: true,
       selected: selected,
+      liveRegion: hasConversationText,
       excludeSemantics: true,
+      onTap: selectSpeaker,
       label:
-          '${side == SpeakerSide.a ? '讲话人 A' : '讲话人 B'}，${language.name}，点击切换讲话人',
+          '${side == SpeakerSide.a ? '讲话人 A' : '讲话人 B'}，${language.name}，$role：$text。点击切换讲话人',
       child: Material(
+        key: ValueKey<String>('face-half-${side.name}'),
         color: selected
             ? accent.withValues(alpha: 0.13)
             : colors.surfaceContainerLow,
@@ -943,7 +989,7 @@ class _FaceHalf extends StatelessWidget {
             final bool compact = constraints.maxHeight < 240;
             final double gap = compact ? 4 : 12;
             return InkWell(
-              onTap: () => unawaited(controller.selectSpeaker(side)),
+              onTap: selectSpeaker,
               child: Padding(
                 padding: EdgeInsets.all(compact ? 8 : 22),
                 child: Column(
@@ -962,10 +1008,36 @@ class _FaceHalf extends StatelessWidget {
                       ),
                     ),
                     SizedBox(height: gap),
-                    Icon(
-                      selected ? Icons.mic_rounded : Icons.touch_app_outlined,
-                      color: accent,
-                      size: compact ? 24 : 32,
+                    Container(
+                      padding: EdgeInsets.symmetric(
+                        horizontal: compact ? 8 : 11,
+                        vertical: compact ? 3 : 5,
+                      ),
+                      decoration: BoxDecoration(
+                        color: accent.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: <Widget>[
+                          Icon(
+                            selected
+                                ? Icons.mic_rounded
+                                : Icons.translate_rounded,
+                            color: accent,
+                            size: compact ? 17 : 20,
+                          ),
+                          const SizedBox(width: 5),
+                          Text(
+                            role,
+                            style: TextStyle(
+                              color: accent,
+                              fontSize: compact ? 11 : 13,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                     SizedBox(height: gap),
                     Text(

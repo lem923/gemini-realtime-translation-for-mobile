@@ -159,6 +159,21 @@ class ConversationController extends ChangeNotifier {
   String get interimSource => _sourceTranscripts[_activeSpeaker]!.value;
   String get interimTranslation =>
       _translatedTranscripts[_activeSpeaker]!.value;
+  bool get hasInterimTranscript =>
+      interimSource.isNotEmpty || interimTranslation.isNotEmpty;
+  ConversationTurn? get latestActiveTurn {
+    final TranslationLanguage expectedSource = activeSourceLanguage;
+    final TranslationLanguage expectedTarget = activeTargetLanguage;
+    for (final ConversationTurn turn in _turns.reversed) {
+      if (turn.speaker == _activeSpeaker &&
+          turn.sourceLanguage.code == expectedSource.code &&
+          turn.targetLanguage.code == expectedTarget.code) {
+        return turn;
+      }
+    }
+    return null;
+  }
+
   String? get errorMessage => _errorMessage;
   List<ConversationTurn> get turns =>
       List<ConversationTurn>.unmodifiable(_turns);
