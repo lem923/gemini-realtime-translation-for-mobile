@@ -98,6 +98,47 @@ Progress and the final report contain only audio-chunk totals, readiness,
 reconnect/failure counts, payload sizes, and Token counters. They never print the
 key, audio, or transcript content.
 
+For a multi-turn, two-direction travel check, create a private manifest that
+points to generated or otherwise non-sensitive 16 kHz mono PCM fixtures. Do not
+commit the manifest or audio:
+
+```json
+{
+  "languageA": "zh-Hans",
+  "languageB": "en",
+  "turns": [
+    {
+      "scenario": "hotel",
+      "speaker": "A",
+      "pcm": "/absolute/path/to/hotel-a.pcm",
+      "expectedTargetTerms": ["reservation|booking"]
+    },
+    {
+      "scenario": "hotel",
+      "speaker": "B",
+      "pcm": "/absolute/path/to/hotel-b.pcm",
+      "expectedTargetTerms": ["护照|证件"]
+    }
+  ]
+}
+```
+
+Each expected-term string is one required semantic group; alternatives within
+a group are separated by `|`. Optional `expectedSourceTerms` uses the same
+format. Run the redacted harness with at least one turn for each speaker:
+
+```bash
+GEMINI_API_KEY='your-key' \
+LIVE_TEST_DIALOG_MANIFEST='/absolute/path/to/manifest.json' \
+LIVE_TEST_SWITCH_DELAY_MILLISECONDS=4000 \
+dart run tool/live_dialog_smoke.dart
+```
+
+The harness sends `audioStreamEnd` after each fixture and passes only when every
+turn has source text, translated text, translated PCM audio, the expected
+language scripts, and all requested semantic groups. Output contains only safe
+scenario labels, counts, latency metrics, event totals, and Token totals.
+
 ## Remaining Android hardening gate
 
 The first runnable Android spike must measure:

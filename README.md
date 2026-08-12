@@ -2,7 +2,7 @@
 
 Android-first, cross-platform, ultra-low-latency, two-way speech translation for face-to-face travel conversations, powered by the Google Gemini Live API and `gemini-3.5-live-translate-preview`.
 
-> Status: Android-first `0.11.0` preview. The app, bounded native Android audio path, real Gemini speech/text/audio pipeline, listener-facing face-to-face translation, interruption-safe speaker switching, translated-audio replay, persisted language-pair preferences, typed offline/quota/permission recovery states, long-session context compression, system-audio interruption handling, and privacy-safe runtime diagnostics are runnable; physical-device acoustic and latency hardening remains before a production release.
+> Status: Android-first `0.12.0` preview. The app, bounded native Android audio path, real Gemini speech/text/audio pipeline, listener-facing face-to-face translation, interruption-safe speaker switching, translated-audio replay, persisted language-pair preferences, typed offline/quota/permission recovery states, explicit audio-stream boundaries, long-session context compression, system-audio interruption handling, and privacy-safe runtime diagnostics are runnable; physical-device acoustic and latency hardening remains before a production release.
 
 ## Product direction
 
@@ -70,7 +70,7 @@ Flutter is the accepted application framework. Android is the first implementati
 
 See the [Google Live Translation guide](https://ai.google.dev/gemini-api/docs/live-api/live-translate) for the current API contract.
 
-## Implemented through 0.11.0
+## Implemented through 0.12.0
 
 - Direct BYOK WebSocket connection to `gemini-3.5-live-translate-preview` with no application backend.
 - Source transcript, translated transcript, and translated 24 kHz PCM audio output.
@@ -78,6 +78,9 @@ See the [Google Live Translation guide](https://ai.google.dev/gemini-api/docs/li
 - Speaker changes immediately discard speech queued for the previous direction,
   reset echo suppression, and reopen capture only after the new direction is
   ready, so users can actively interrupt a long translation.
+- Speaker changes and stops send the Live API's `audioStreamEnd` boundary, and
+  late text/audio/completion events from the now-inactive directional session
+  are discarded instead of leaking into the next turn.
 - More than 70 searchable target languages using the official BCP-47 list.
 - The last valid A/B language pair is restored across restarts and upgrades from
   one non-sensitive local preference; conversation text and audio remain memory-only.
@@ -129,11 +132,15 @@ Enter your own Google AI Studio key in the app. The key's project must be able t
 ## Validation status
 
 - `flutter analyze`: clean.
-- 61 automated protocol, preference, permission, session, PCM, transcript, controller, diagnostics, and
+- 64 automated protocol, preference, permission, session, PCM, transcript, controller, diagnostics, and
   responsive widget tests: passing.
 - Real API smoke: both Chinese-to-English and English-to-Chinese 16 kHz speech
   inputs produced source text, translated text, and 24 kHz audio. The server also
   accepted context compression and returned non-zero usage metadata.
+- Real two-way travel dialogue: 10/10 alternating Chinese/English turns across
+  hotel, restaurant, taxi, shopping, and emergency scenarios produced source
+  text, semantically checked target text, and translated audio through nine
+  direction switches with zero session failures or reconnects.
 - A deterministic logical 20-minute media run processed 12,000 microphone chunks,
   240 completed turns, and 11.52 MB of translated PCM while preserving the
   200-turn history and bounded replay/cache policies.

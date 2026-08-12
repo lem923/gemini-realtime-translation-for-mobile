@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-08-13
+
+### Added
+
+- Added an official `audioStreamEnd` protocol boundary and send it whenever a
+  manual direction switch or conversation stop pauses the active microphone
+  stream.
+- Added a privacy-safe two-session dialogue harness for alternating travel
+  scenarios, with configurable switch timing, source/target script checks,
+  target semantic assertions, latency percentiles, and redacted usage totals.
+
+### Fixed
+
+- Discarded late input transcription, output transcription, audio, and turn
+  completion events from an inactive directional session so an interrupted
+  response cannot pollute or commit the next turn after switching back.
+- Preserved the explicit user speaker tap as a reliable turn boundary when the
+  preview translation model omits `serverContent.turnComplete`.
+
+### Tests
+
+- Added regressions for manual speaker switching without a server turn-complete
+  event, inactive-session event isolation, and audio-stream-end serialization.
+- Passed a real 10-turn Chinese/English dialogue over hotel, restaurant, taxi,
+  shopping, and emergency fixtures with nine direction switches, three output
+  forms on every turn, semantic target checks, zero failures, and zero reconnects.
+- Expanded the automated suite to 64 passing tests at 85.4% line coverage.
+
 ## [0.11.0] - 2026-08-13
 
 ### Added
