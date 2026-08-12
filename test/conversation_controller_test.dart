@@ -284,6 +284,7 @@ void main() {
       ]);
 
       await controller.selectSpeaker(SpeakerSide.b);
+      expect(sessions.first.endAudioStreamCount, 1);
       capture.emit(<int>[3, 4]);
       await _flushEvents();
       expect(sessions[1].audio, <List<int>>[
@@ -305,11 +306,101 @@ void main() {
       expect(controller.turns.single.translatedText, '你好');
 
       await controller.stopConversation();
+      expect(sessions[1].endAudioStreamCount, 1);
       expect(controller.phase, ConversationPhase.idle);
       expect(capture.stopped, isTrue);
       controller.dispose();
     },
   );
+
+  test(
+    'manual speaker switch commits output without a server turn-complete event',
+    () async {
+      final _FakeAudioCapture capture = _FakeAudioCapture();
+      final _FakePlayback playback = _FakePlayback();
+      final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
+      final ConversationController controller = ConversationController(
+        keyStore: _MemoryKeyStore('stored-key'),
+        audioCapture: capture,
+        playback: playback,
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) {
+              final _FakeLiveSession session = _FakeLiveSession();
+              sessions.add(session);
+              return session;
+            },
+      );
+
+      await controller.initialize();
+      await controller.startConversation();
+      sessions.first
+        ..emit(const LiveInputTranscript('你好', 'zh-Hans'))
+        ..emit(const LiveOutputTranscript('hello', 'en'))
+        ..emit(LiveAudioChunk(Uint8List(4800)));
+      await _flushEvents();
+
+      expect(controller.phase, ConversationPhase.translating);
+      expect(controller.turns, isEmpty);
+      await controller.selectSpeaker(SpeakerSide.b);
+
+      expect(controller.phase, ConversationPhase.listening);
+      expect(controller.turns, hasLength(1));
+      expect(controller.turns.single.sourceText, '你好');
+      expect(controller.turns.single.translatedText, 'hello');
+      expect(controller.hasReplayAudio(controller.turns.single.id), isTrue);
+      expect(playback.operations, contains('flush'));
+
+      await controller.stopConversation();
+      controller.dispose();
+    },
+  );
+
+  test('ignores late events from the inactive speaker session', () async {
+    final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
+    final ConversationController controller = ConversationController(
+      keyStore: _MemoryKeyStore('stored-key'),
+      audioCapture: _FakeAudioCapture(),
+      playback: _FakePlayback(),
+      sessionFactory:
+          ({required String apiKey, required String targetLanguageCode}) {
+            final _FakeLiveSession session = _FakeLiveSession();
+            sessions.add(session);
+            return session;
+          },
+    );
+
+    await controller.initialize();
+    await controller.startConversation();
+    await _flushEvents();
+    await controller.selectSpeaker(SpeakerSide.b);
+
+    sessions.first
+      ..emit(const LiveInputTranscript('stale source', 'en'))
+      ..emit(const LiveOutputTranscript('过期译文', 'zh-Hans'))
+      ..emit(LiveAudioChunk(Uint8List(4800)))
+      ..emit(const LiveTurnComplete());
+    await _flushEvents();
+
+    expect(controller.turns, isEmpty);
+    expect(controller.interimSource, isEmpty);
+    expect(controller.interimTranslation, isEmpty);
+
+    await controller.selectSpeaker(SpeakerSide.a);
+    expect(controller.interimSource, isEmpty);
+    expect(controller.interimTranslation, isEmpty);
+    sessions.first
+      ..emit(const LiveInputTranscript('fresh source', 'en'))
+      ..emit(const LiveOutputTranscript('新译文', 'zh-Hans'))
+      ..emit(const LiveTurnComplete());
+    await _flushEvents();
+
+    expect(controller.turns, hasLength(1));
+    expect(controller.turns.single.sourceText, 'fresh source');
+    expect(controller.turns.single.translatedText, '新译文');
+
+    await controller.stopConversation();
+    controller.dispose();
+  });
 
   test(
     'blocks microphone capture until all queued translated audio ends',
@@ -1532,6 +1623,7 @@ class _FakeLiveSession implements LiveTranslationSession {
   final List<List<int>> audio = <List<int>>[];
   bool closed = false;
   int closeCount = 0;
+  int endAudioStreamCount = 0;
   bool _ready = false;
 
   void emit(LiveEvent event) => _controller.add(event);
@@ -1560,6 +1652,9 @@ class _FakeLiveSession implements LiveTranslationSession {
 
   @override
   void sendAudio(Uint8List pcm) => audio.add(pcm.toList());
+
+  @override
+  void endAudioStream() => endAudioStreamCount += 1;
 
   @override
   Future<void> close() async {

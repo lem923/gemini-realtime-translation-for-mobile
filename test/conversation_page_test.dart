@@ -493,4 +493,7 @@ class _NoopLiveSession implements LiveTranslationSession {
 
   @override
   void sendAudio(Uint8List pcm) {}
+
+  @override
+  void endAudioStream() {}
 }

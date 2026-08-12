@@ -39,6 +39,7 @@ Future<void> main(List<String> arguments) async {
   int promptTokens = 0;
   int responseTokens = 0;
   int totalTokens = 0;
+  int turnCompleteEvents = 0;
   bool setupComplete = false;
   bool audioSent = false;
   String? failure;
@@ -71,6 +72,7 @@ Future<void> main(List<String> arguments) async {
         responseTokens += event.responseTokenCount;
         totalTokens += event.totalTokenCount;
       case LiveTurnComplete():
+        turnCompleteEvents += 1;
         if (!completed.isCompleted) completed.complete();
       case LiveSessionFailure(:final String userMessage):
         failure = userMessage;
@@ -100,6 +102,7 @@ Future<void> main(List<String> arguments) async {
       'input_text_chars=$inputTranscriptCharacters '
       'output_text_chars=$outputTranscriptCharacters '
       'output_audio_bytes=$outputAudioBytes '
+      'turn_complete_events=$turnCompleteEvents '
       'prompt_tokens=$promptTokens '
       'response_tokens=$responseTokens '
       'total_tokens=$totalTokens',

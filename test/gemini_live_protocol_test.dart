@@ -44,6 +44,16 @@ void main() {
     expect(audio['data'], base64Encode(bytes));
   });
 
+  test('audio stream end message flushes server-side input buffering', () {
+    final Map<String, Object?> root =
+        jsonDecode(GeminiLiveProtocol.audioStreamEndMessage())
+            as Map<String, Object?>;
+
+    expect(root, <String, Object?>{
+      'realtimeInput': <String, Object?>{'audioStreamEnd': true},
+    });
+  });
+
   test('serializes resumption and parses a resumable go-away notice', () {
     final Object? decoded = jsonDecode(
       GeminiLiveProtocol.setupMessage(

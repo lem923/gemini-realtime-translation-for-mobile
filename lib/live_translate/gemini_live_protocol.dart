@@ -53,6 +53,12 @@ class GeminiLiveProtocol {
     });
   }
 
+  static String audioStreamEndMessage() {
+    return jsonEncode(<String, Object?>{
+      'realtimeInput': <String, Object?>{'audioStreamEnd': true},
+    });
+  }
+
   static List<LiveEvent> parseServerMessage(String payload) {
     final Object? decoded;
     try {

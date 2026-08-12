@@ -15,6 +15,7 @@ abstract interface class LiveTranslationSession {
   bool get isReady;
   Future<void> connect();
   void sendAudio(Uint8List pcm);
+  void endAudioStream();
   Future<void> close();
 }
 
@@ -366,6 +367,14 @@ class GeminiLiveSession implements LiveTranslationSession {
       return;
     }
     _channel?.sink.add(GeminiLiveProtocol.audioMessage(pcm));
+  }
+
+  @override
+  void endAudioStream() {
+    if (!_ready || _disposed) {
+      return;
+    }
+    _channel?.sink.add(GeminiLiveProtocol.audioStreamEndMessage());
   }
 
   @override

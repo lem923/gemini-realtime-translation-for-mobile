@@ -512,23 +512,17 @@ class ConversationController extends ChangeNotifier {
     }
     switch (event) {
       case LiveInputTranscript(:final String text):
-        if (side == _activeSpeaker) {
-          _firstSourceTextMilliseconds ??= _elapsedFromFirstSendMilliseconds();
-        }
+        if (side != _activeSpeaker) return;
+        _firstSourceTextMilliseconds ??= _elapsedFromFirstSendMilliseconds();
         _sourceTranscripts[side]!.add(text);
-        if (side == _activeSpeaker) {
-          notifyListeners();
-        }
+        notifyListeners();
       case LiveOutputTranscript(:final String text):
-        if (side == _activeSpeaker) {
-          _markTranslating();
-          _firstTranslatedTextMilliseconds ??=
-              _elapsedFromFirstSendMilliseconds();
-        }
+        if (side != _activeSpeaker) return;
+        _markTranslating();
+        _firstTranslatedTextMilliseconds ??=
+            _elapsedFromFirstSendMilliseconds();
         _translatedTranscripts[side]!.add(text);
-        if (side == _activeSpeaker) {
-          notifyListeners();
-        }
+        notifyListeners();
       case LiveAudioChunk(:final Uint8List bytes):
         if (side == _activeSpeaker) {
           final bool phaseChanged = _markTranslating();
@@ -551,9 +545,9 @@ class ConversationController extends ChangeNotifier {
           }
         }
       case LiveTurnComplete():
+        if (side != _activeSpeaker) return;
         _commitTurn(side);
-        if (side == _activeSpeaker &&
-            _captureSubscription != null &&
+        if (_captureSubscription != null &&
             _phase == ConversationPhase.translating) {
           _phase = ConversationPhase.listening;
           notifyListeners();
@@ -808,6 +802,7 @@ class ConversationController extends ChangeNotifier {
     if (_diagnosticStartedMicros != null && _diagnosticStoppedMicros == null) {
       _directionSwitches += 1;
     }
+    _sessions[_activeSpeaker]?.endAudioStream();
     _commitTurn(_activeSpeaker);
     _activeSpeaker = side;
     _errorMessage = null;
@@ -1079,6 +1074,7 @@ class ConversationController extends ChangeNotifier {
     if (_diagnosticStartedMicros != null) {
       _diagnosticStoppedMicros ??= _monotonicMicros();
     }
+    _sessions[_activeSpeaker]?.endAudioStream();
     _commitTurn(_activeSpeaker);
     await _captureSubscription?.cancel();
     _captureSubscription = null;
