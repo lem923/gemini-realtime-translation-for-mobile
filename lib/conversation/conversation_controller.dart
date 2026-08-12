@@ -105,8 +105,6 @@ class ConversationController extends ChangeNotifier {
   int _geminiResponseTokens = 0;
   int _geminiTotalTokens = 0;
   bool _geminiUsageAvailable = false;
-  final Map<SpeakerSide, LiveUsageMetadata> _lastUsageBySide =
-      <SpeakerSide, LiveUsageMetadata>{};
   int _maximumScheduledPlaybackMicros = 0;
   String? _errorMessage;
   ConversationPhase _phase = ConversationPhase.needsKey;
@@ -574,7 +572,7 @@ class ConversationController extends ChangeNotifier {
           }
         }
       case LiveUsageMetadata():
-        _recordUsage(side, event);
+        _recordUsage(event);
       case LivePhaseChanged(:final LiveSessionPhase phase):
         if (side != _activeSpeaker) {
           return;
@@ -1222,33 +1220,14 @@ class ConversationController extends ChangeNotifier {
     _geminiResponseTokens = 0;
     _geminiTotalTokens = 0;
     _geminiUsageAvailable = false;
-    _lastUsageBySide.clear();
     _maximumScheduledPlaybackMicros = 0;
   }
 
-  void _recordUsage(SpeakerSide side, LiveUsageMetadata usage) {
-    final LiveUsageMetadata? previous = _lastUsageBySide[side];
-    _geminiPromptTokens += _usageDelta(
-      usage.promptTokenCount,
-      previous?.promptTokenCount,
-    );
-    _geminiResponseTokens += _usageDelta(
-      usage.responseTokenCount,
-      previous?.responseTokenCount,
-    );
-    _geminiTotalTokens += _usageDelta(
-      usage.totalTokenCount,
-      previous?.totalTokenCount,
-    );
+  void _recordUsage(LiveUsageMetadata usage) {
+    _geminiPromptTokens += usage.promptTokenCount;
+    _geminiResponseTokens += usage.responseTokenCount;
+    _geminiTotalTokens += usage.totalTokenCount;
     _geminiUsageAvailable = true;
-    _lastUsageBySide[side] = usage;
-  }
-
-  static int _usageDelta(int current, int? previous) {
-    if (previous == null || current < previous) {
-      return current;
-    }
-    return current - previous;
   }
 
   int _elapsedDiagnosticMilliseconds() {

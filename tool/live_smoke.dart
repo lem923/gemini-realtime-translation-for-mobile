@@ -67,9 +67,9 @@ Future<void> main(List<String> arguments) async {
         outputAudioBytes += bytes.length;
         completeWhenOutputArrives();
       case LiveUsageMetadata():
-        promptTokens = event.promptTokenCount;
-        responseTokens = event.responseTokenCount;
-        totalTokens = event.totalTokenCount;
+        promptTokens += event.promptTokenCount;
+        responseTokens += event.responseTokenCount;
+        totalTokens += event.totalTokenCount;
       case LiveTurnComplete():
         if (!completed.isCompleted) completed.complete();
       case LiveSessionFailure(:final String userMessage):

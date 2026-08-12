@@ -1315,9 +1315,9 @@ void main() {
     expect(diagnostics.directionSwitches, 1);
     expect(diagnostics.reconnectEvents, 1);
     expect(diagnostics.sessionFailures, 1);
-    expect(diagnostics.geminiPromptTokens, 220);
-    expect(diagnostics.geminiResponseTokens, 50);
-    expect(diagnostics.geminiTotalTokens, 270);
+    expect(diagnostics.geminiPromptTokens, 320);
+    expect(diagnostics.geminiResponseTokens, 70);
+    expect(diagnostics.geminiTotalTokens, 390);
     expect(diagnostics.geminiUsageAvailable, isTrue);
     expect(diagnostics.listeningReadyMilliseconds, 0);
     expect(diagnostics.firstMicrophoneSentMilliseconds, 0);
@@ -1337,7 +1337,7 @@ void main() {
     expect(report, isNot(contains('秘密译文')));
     expect(report, isNot(contains('stored-key')));
     expect(report, contains('不含 Key、音频或对话内容'));
-    expect(report, contains('220 / 50 / 270'));
+    expect(report, contains('320 / 70 / 390'));
 
     nowMicros = 1300000;
     await controller.stopConversation();
