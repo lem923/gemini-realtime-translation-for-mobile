@@ -111,6 +111,56 @@ void main() {
     await tester.pumpAndSettle();
     controller.dispose();
   });
+
+  testWidgets(
+    'shows and operates Material replay control for a completed turn',
+    (WidgetTester tester) async {
+      tester.view.physicalSize = const Size(1080, 2400);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final _NoopPlayback playback = _NoopPlayback();
+      final List<_NoopLiveSession> sessions = <_NoopLiveSession>[];
+      final ConversationController controller = ConversationController(
+        keyStore: _StoredKeyStore(),
+        audioCapture: _NoopAudioCapture(),
+        playback: playback,
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) {
+              final _NoopLiveSession session = _NoopLiveSession();
+              sessions.add(session);
+              return session;
+            },
+      );
+      await controller.initialize();
+      await controller.startConversation();
+      sessions.first
+        ..emit(const LiveInputTranscript('Where is the station?', 'en'))
+        ..emit(const LiveOutputTranscript('车站在哪里？', 'zh-Hans'))
+        ..emit(LiveAudioChunk(Uint8List(4800)))
+        ..emit(const LiveTurnComplete());
+
+      await tester.pumpWidget(
+        MaterialApp(home: ConversationPage(controller: controller)),
+      );
+      await tester.pumpAndSettle();
+      final Finder replayButton = find.byTooltip('回放译音');
+      await tester.ensureVisible(replayButton);
+      expect(replayButton, findsOneWidget);
+      final int enqueuesBeforeReplay = playback.enqueued.length;
+
+      await tester.tap(replayButton);
+      await tester.pump();
+      expect(find.byTooltip('停止回放'), findsOneWidget);
+      await tester.pump(const Duration(milliseconds: 120));
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.pump();
+
+      expect(playback.enqueued.length, enqueuesBeforeReplay + 1);
+      expect(find.byTooltip('回放译音'), findsOneWidget);
+      controller.dispose();
+    },
+  );
 }
 
 class _StoredKeyStore implements ApiKeyStore {
@@ -139,6 +189,8 @@ class _NoopAudioCapture implements AudioCaptureGateway {
 }
 
 class _NoopPlayback implements PcmPlaybackGateway {
+  final List<List<int>> enqueued = <List<int>>[];
+
   @override
   Stream<PcmPlaybackEvent> get events => const Stream<PcmPlaybackEvent>.empty();
 
@@ -149,7 +201,7 @@ class _NoopPlayback implements PcmPlaybackGateway {
   Future<void> dispose() async {}
 
   @override
-  Future<void> enqueue(Uint8List pcm) async {}
+  Future<void> enqueue(Uint8List pcm) async => enqueued.add(pcm.toList());
 
   @override
   Future<void> flush() async {}
@@ -162,6 +214,8 @@ class _NoopPlayback implements PcmPlaybackGateway {
 class _NoopLiveSession implements LiveTranslationSession {
   final StreamController<LiveEvent> _events =
       StreamController<LiveEvent>.broadcast();
+
+  void emit(LiveEvent event) => _events.add(event);
 
   @override
   Future<void> close() => _events.close();

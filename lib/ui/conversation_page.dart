@@ -171,7 +171,7 @@ class _ConversationBody extends StatelessWidget {
                 for (final ConversationTurn turn in controller.turns.reversed)
                   Padding(
                     padding: const EdgeInsets.only(bottom: 10),
-                    child: _TurnCard(turn: turn),
+                    child: _TurnCard(turn: turn, controller: controller),
                   ),
             ],
           ),
@@ -635,14 +635,17 @@ class _EmptyConversation extends StatelessWidget {
 }
 
 class _TurnCard extends StatelessWidget {
-  const _TurnCard({required this.turn});
+  const _TurnCard({required this.turn, required this.controller});
   final ConversationTurn turn;
+  final ConversationController controller;
 
   @override
   Widget build(BuildContext context) {
     final ColorScheme colors = Theme.of(context).colorScheme;
     final bool isA = turn.speaker == SpeakerSide.a;
     final Color accent = isA ? colors.primary : colors.tertiary;
+    final bool hasReplay = controller.hasReplayAudio(turn.id);
+    final bool replaying = controller.replayingTurnId == turn.id;
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -667,14 +670,30 @@ class _TurnCard extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 9),
-              Text(
-                '${turn.sourceLanguage.name} → ${turn.targetLanguage.name}',
-                style: TextStyle(
-                  color: colors.onSurfaceVariant,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
+              Expanded(
+                child: Text(
+                  '${turn.sourceLanguage.name} → ${turn.targetLanguage.name}',
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: colors.onSurfaceVariant,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ),
+              if (hasReplay) ...<Widget>[
+                const SizedBox(width: 8),
+                IconButton.filledTonal(
+                  tooltip: replaying ? '停止回放' : '回放译音',
+                  onPressed: controller.audioMuted
+                      ? null
+                      : () => unawaited(controller.replayTurn(turn.id)),
+                  icon: Icon(
+                    replaying ? Icons.stop_rounded : Icons.volume_up_rounded,
+                    size: 20,
+                  ),
+                ),
+              ],
             ],
           ),
           if (turn.sourceText.isNotEmpty) ...<Widget>[
@@ -708,6 +727,8 @@ class _ControlDock extends StatelessWidget {
     final bool busy = controller.isBusy;
     final String label = !controller.hasApiKey
         ? '设置 API Key'
+        : controller.replayingTurnId != null
+        ? '正在回放译音…'
         : controller.isListening
         ? '停止翻译'
         : busy
@@ -715,6 +736,8 @@ class _ControlDock extends StatelessWidget {
         : '开始翻译';
     final IconData icon = !controller.hasApiKey
         ? Icons.key_rounded
+        : controller.replayingTurnId != null
+        ? Icons.volume_up_rounded
         : controller.isListening
         ? Icons.stop_rounded
         : Icons.mic_rounded;
