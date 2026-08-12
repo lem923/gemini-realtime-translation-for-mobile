@@ -101,6 +101,12 @@ class ConversationController extends ChangeNotifier {
   int _sessionFailures = 0;
   int _playbackFailures = 0;
   int _audioInterruptions = 0;
+  int _geminiPromptTokens = 0;
+  int _geminiResponseTokens = 0;
+  int _geminiTotalTokens = 0;
+  bool _geminiUsageAvailable = false;
+  final Map<SpeakerSide, LiveUsageMetadata> _lastUsageBySide =
+      <SpeakerSide, LiveUsageMetadata>{};
   int _maximumScheduledPlaybackMicros = 0;
   String? _errorMessage;
   ConversationPhase _phase = ConversationPhase.needsKey;
@@ -567,6 +573,8 @@ class ConversationController extends ChangeNotifier {
             notifyListeners();
           }
         }
+      case LiveUsageMetadata():
+        _recordUsage(side, event);
       case LivePhaseChanged(:final LiveSessionPhase phase):
         if (side != _activeSpeaker) {
           return;
@@ -1174,6 +1182,10 @@ class ConversationController extends ChangeNotifier {
       sessionFailures: _sessionFailures,
       playbackFailures: _playbackFailures,
       audioInterruptions: _audioInterruptions,
+      geminiPromptTokens: _geminiPromptTokens,
+      geminiResponseTokens: _geminiResponseTokens,
+      geminiTotalTokens: _geminiTotalTokens,
+      geminiUsageAvailable: _geminiUsageAvailable,
       listeningReadyMilliseconds: _listeningReadyMilliseconds,
       firstMicrophoneSentMilliseconds: _firstMicrophoneSentMilliseconds,
       firstSourceTextMilliseconds: _firstSourceTextMilliseconds,
@@ -1206,7 +1218,37 @@ class ConversationController extends ChangeNotifier {
     _sessionFailures = 0;
     _playbackFailures = 0;
     _audioInterruptions = 0;
+    _geminiPromptTokens = 0;
+    _geminiResponseTokens = 0;
+    _geminiTotalTokens = 0;
+    _geminiUsageAvailable = false;
+    _lastUsageBySide.clear();
     _maximumScheduledPlaybackMicros = 0;
+  }
+
+  void _recordUsage(SpeakerSide side, LiveUsageMetadata usage) {
+    final LiveUsageMetadata? previous = _lastUsageBySide[side];
+    _geminiPromptTokens += _usageDelta(
+      usage.promptTokenCount,
+      previous?.promptTokenCount,
+    );
+    _geminiResponseTokens += _usageDelta(
+      usage.responseTokenCount,
+      previous?.responseTokenCount,
+    );
+    _geminiTotalTokens += _usageDelta(
+      usage.totalTokenCount,
+      previous?.totalTokenCount,
+    );
+    _geminiUsageAvailable = true;
+    _lastUsageBySide[side] = usage;
+  }
+
+  static int _usageDelta(int current, int? previous) {
+    if (previous == null || current < previous) {
+      return current;
+    }
+    return current - previous;
   }
 
   int _elapsedDiagnosticMilliseconds() {

@@ -30,6 +30,9 @@ class GeminiLiveProtocol {
       // setup level. The SDK config flattens these fields the same way.
       'inputAudioTranscription': <String, Object?>{},
       'outputAudioTranscription': <String, Object?>{},
+      'contextWindowCompression': <String, Object?>{
+        'slidingWindow': <String, Object?>{},
+      },
     };
     if (resumptionHandle != null) {
       setup['sessionResumption'] = <String, Object?>{
@@ -123,6 +126,17 @@ class GeminiLiveProtocol {
       );
     }
 
+    final Map<String, Object?>? usage = _map(message['usageMetadata']);
+    if (usage != null) {
+      events.add(
+        LiveUsageMetadata(
+          promptTokenCount: _nonNegativeInt(usage['promptTokenCount']),
+          responseTokenCount: _nonNegativeInt(usage['responseTokenCount']),
+          totalTokenCount: _nonNegativeInt(usage['totalTokenCount']),
+        ),
+      );
+    }
+
     final Map<String, Object?>? content = _map(message['serverContent']);
     if (content == null) {
       return events;
@@ -176,4 +190,13 @@ class GeminiLiveProtocol {
   }
 
   static String? _string(Object? value) => value is String ? value : null;
+
+  static int _nonNegativeInt(Object? value) {
+    final int? parsed = switch (value) {
+      final int number => number,
+      final String text => int.tryParse(text),
+      _ => null,
+    };
+    return parsed == null || parsed < 0 ? 0 : parsed;
+  }
 }

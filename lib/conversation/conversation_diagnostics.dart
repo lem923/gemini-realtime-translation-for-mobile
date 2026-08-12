@@ -18,6 +18,10 @@ class ConversationDiagnostics {
     required this.sessionFailures,
     required this.playbackFailures,
     required this.audioInterruptions,
+    required this.geminiPromptTokens,
+    required this.geminiResponseTokens,
+    required this.geminiTotalTokens,
+    required this.geminiUsageAvailable,
     required this.listeningReadyMilliseconds,
     required this.firstMicrophoneSentMilliseconds,
     required this.firstSourceTextMilliseconds,
@@ -40,6 +44,10 @@ class ConversationDiagnostics {
   final int sessionFailures;
   final int playbackFailures;
   final int audioInterruptions;
+  final int geminiPromptTokens;
+  final int geminiResponseTokens;
+  final int geminiTotalTokens;
+  final bool geminiUsageAvailable;
   final int? listeningReadyMilliseconds;
   final int? firstMicrophoneSentMilliseconds;
   final int? firstSourceTextMilliseconds;
@@ -64,6 +72,8 @@ class ConversationDiagnostics {
       '会话错误: $sessionFailures',
       '播放错误: $playbackFailures',
       '系统音频中断: $audioInterruptions',
+      'Gemini Token 输入 / 输出 / 合计: '
+          '${geminiUsageAvailable ? '$geminiPromptTokens / $geminiResponseTokens / $geminiTotalTokens' : '未收到'}',
       '连接并开始聆听: ${latency(listeningReadyMilliseconds)}',
       '首个麦克风发送块: ${latency(firstMicrophoneSentMilliseconds)}',
       '首段原文（相对首个发送块）: '

@@ -54,6 +54,18 @@ class LiveGoAway extends LiveEvent {
   const LiveGoAway();
 }
 
+class LiveUsageMetadata extends LiveEvent {
+  const LiveUsageMetadata({
+    required this.promptTokenCount,
+    required this.responseTokenCount,
+    required this.totalTokenCount,
+  });
+
+  final int promptTokenCount;
+  final int responseTokenCount;
+  final int totalTokenCount;
+}
+
 class LiveSessionFailure extends LiveEvent {
   const LiveSessionFailure({
     required this.userMessage,
