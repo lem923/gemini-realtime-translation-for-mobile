@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-13
+
+### Changed
+
+- Treat a manual A/B speaker change as an immediate barge-in boundary: enter a
+  non-listening state, discard translated speech queued for the previous
+  direction, reset the echo guard, connect the selected direction, and only
+  then reopen microphone routing.
+
+### Added
+
+- Added deterministic coverage for queued translated audio, microphone routing
+  while a flush is pending, playback-flush degradation, and rapid A/B/A races.
+- Exercised ten consecutive direction changes against the real Gemini service
+  on an Android API 36 emulator while translated audio was streaming.
+
 ## [0.3.0] - 2026-08-13
 
 ### Added
