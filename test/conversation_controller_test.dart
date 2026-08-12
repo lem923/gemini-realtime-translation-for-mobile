@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:realtime_translation/audio/audio_capture_gateway.dart';
 import 'package:realtime_translation/audio/pcm_playback_gateway.dart';
 import 'package:realtime_translation/conversation/conversation_controller.dart';
+import 'package:realtime_translation/conversation/conversation_diagnostics.dart';
 import 'package:realtime_translation/conversation/conversation_models.dart';
 import 'package:realtime_translation/live_translate/live_event.dart';
 import 'package:realtime_translation/live_translate/live_translation_session.dart';
@@ -285,6 +286,7 @@ void main() {
     expect(sessions, isNotEmpty);
     expect(sessions.every((session) => session.closeCount == 1), isTrue);
     expect(controller.phase, ConversationPhase.idle);
+    expect(controller.isBusy, isFalse);
     controller.dispose();
   });
 
@@ -369,6 +371,153 @@ void main() {
     },
   );
 
+  test('terminal session failure releases resources before retry', () async {
+    final Completer<void> closeGate = Completer<void>();
+    final _FakeAudioCapture capture = _FakeAudioCapture();
+    final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
+    final ConversationController controller = ConversationController(
+      keyStore: _MemoryKeyStore('stored-key'),
+      audioCapture: capture,
+      playback: _FakePlayback(),
+      sessionFactory:
+          ({required String apiKey, required String targetLanguageCode}) {
+            final _FakeLiveSession session = _FakeLiveSession(
+              closeGate: closeGate,
+            );
+            sessions.add(session);
+            return session;
+          },
+    );
+
+    await controller.initialize();
+    await controller.startConversation();
+    await _flushEvents();
+    expect(capture.startCount, 1);
+    sessions.first.emit(
+      const LiveSessionFailure(
+        userMessage: '配额已用完',
+        authenticationFailure: false,
+        retryable: false,
+      ),
+    );
+    expect(controller.phase, ConversationPhase.failed);
+    expect(controller.isBusy, isTrue);
+
+    await controller.startConversation();
+    expect(capture.startCount, 1);
+    closeGate.complete();
+    await controller.stopConversation(preserveError: true);
+    expect(capture.stopped, isTrue);
+    expect(sessions.every((session) => session.closed), isTrue);
+    expect(controller.phase, ConversationPhase.failed);
+    expect(controller.errorMessage, '配额已用完');
+
+    await controller.startConversation();
+    await _flushEvents();
+    expect(capture.startCount, 2);
+    expect(controller.phase, ConversationPhase.listening);
+    await controller.stopConversation();
+    controller.dispose();
+  });
+
+  test(
+    'microphone stream failure automatically closes live sessions',
+    () async {
+      final _FakeAudioCapture capture = _FakeAudioCapture();
+      final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
+      final ConversationController controller = ConversationController(
+        keyStore: _MemoryKeyStore('stored-key'),
+        audioCapture: capture,
+        playback: _FakePlayback(),
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) {
+              final _FakeLiveSession session = _FakeLiveSession();
+              sessions.add(session);
+              return session;
+            },
+      );
+
+      await controller.initialize();
+      await controller.startConversation();
+      await _flushEvents();
+      capture.emitError(StateError('microphone disconnected'));
+      await controller.stopConversation(preserveError: true);
+
+      expect(controller.phase, ConversationPhase.failed);
+      expect(controller.errorMessage, contains('麦克风采集失败'));
+      expect(capture.stopped, isTrue);
+      expect(sessions.every((session) => session.closed), isTrue);
+      controller.dispose();
+    },
+  );
+
+  test(
+    'capture startup failure closes the already connected session',
+    () async {
+      final _FakeAudioCapture capture = _FakeAudioCapture(
+        startError: StateError('capture unavailable'),
+      );
+      final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
+      final ConversationController controller = ConversationController(
+        keyStore: _MemoryKeyStore('stored-key'),
+        audioCapture: capture,
+        playback: _FakePlayback(),
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) {
+              final _FakeLiveSession session = _FakeLiveSession();
+              sessions.add(session);
+              return session;
+            },
+      );
+
+      await controller.initialize();
+      await controller.startConversation();
+
+      expect(controller.phase, ConversationPhase.failed);
+      expect(controller.isBusy, isFalse);
+      expect(capture.stopped, isTrue);
+      expect(sessions, hasLength(1));
+      expect(sessions.single.closed, isTrue);
+      controller.dispose();
+    },
+  );
+
+  test(
+    'direction connection failure closes capture and both sessions',
+    () async {
+      final _FakeAudioCapture capture = _FakeAudioCapture();
+      final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
+      final ConversationController controller = ConversationController(
+        keyStore: _MemoryKeyStore('stored-key'),
+        audioCapture: capture,
+        playback: _FakePlayback(),
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) {
+              final _FakeLiveSession session = _FakeLiveSession(
+                connectError: sessions.isEmpty
+                    ? null
+                    : StateError('standby unavailable'),
+              );
+              sessions.add(session);
+              return session;
+            },
+      );
+
+      await controller.initialize();
+      await controller.startConversation();
+      await _flushEvents();
+      await controller.selectSpeaker(SpeakerSide.b);
+      await controller.stopConversation(preserveError: true);
+
+      expect(controller.phase, ConversationPhase.failed);
+      expect(controller.errorMessage, contains('切换方向失败'));
+      expect(capture.stopped, isTrue);
+      expect(sessions, hasLength(2));
+      expect(sessions.every((session) => session.closed), isTrue);
+      controller.dispose();
+    },
+  );
+
   test('bounds long conversation history to the latest 200 turns', () async {
     final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
     final ConversationController controller = ConversationController(
@@ -398,6 +547,89 @@ void main() {
     await controller.stopConversation();
     controller.dispose();
   });
+
+  test('collects bounded redacted session and playback diagnostics', () async {
+    int nowMicros = 1000000;
+    final _FakeAudioCapture capture = _FakeAudioCapture();
+    final _FakePlayback playback = _FakePlayback(
+      playbackMetrics: const PcmPlaybackMetrics(
+        queuedBytes: 2400,
+        maxQueuedBytes: 72000,
+        droppedChunks: 2,
+      ),
+    );
+    final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
+    final ConversationController controller = ConversationController(
+      keyStore: _MemoryKeyStore('stored-key'),
+      audioCapture: capture,
+      playback: playback,
+      monotonicMicros: () => nowMicros,
+      sessionFactory:
+          ({required String apiKey, required String targetLanguageCode}) {
+            final _FakeLiveSession session = _FakeLiveSession();
+            sessions.add(session);
+            return session;
+          },
+    );
+
+    await controller.initialize();
+    await controller.startConversation();
+    capture.emit(<int>[1, 2]);
+    nowMicros = 1050000;
+    sessions.first.emit(const LiveInputTranscript('secret source', 'en'));
+    nowMicros = 1070000;
+    sessions.first.emit(const LiveOutputTranscript('秘密译文', 'zh-Hans'));
+    nowMicros = 1080000;
+    sessions.first.emit(LiveAudioChunk(Uint8List(4800)));
+    nowMicros = 1090000;
+    capture.emit(<int>[3, 4]);
+    sessions.first
+      ..emit(const LiveTurnComplete())
+      ..emit(const LivePhaseChanged(LiveSessionPhase.reconnecting))
+      ..emit(
+        const LiveSessionFailure(
+          userMessage: '暂时不可用',
+          authenticationFailure: false,
+          retryable: true,
+        ),
+      );
+    await controller.selectSpeaker(SpeakerSide.b);
+    nowMicros = 1200000;
+
+    final ConversationDiagnostics diagnostics = await controller
+        .collectDiagnostics();
+    expect(diagnostics.sessionDurationMilliseconds, 200);
+    expect(diagnostics.microphoneChunksSent, 1);
+    expect(diagnostics.microphoneChunksSuppressed, 1);
+    expect(diagnostics.outputAudioChunks, 1);
+    expect(diagnostics.outputAudioBytes, 4800);
+    expect(diagnostics.completedTurns, 1);
+    expect(diagnostics.directionSwitches, 1);
+    expect(diagnostics.reconnectEvents, 1);
+    expect(diagnostics.sessionFailures, 1);
+    expect(diagnostics.firstSourceTextMilliseconds, 50);
+    expect(diagnostics.firstTranslatedTextMilliseconds, 70);
+    expect(diagnostics.firstTranslatedAudioMilliseconds, 80);
+    expect(diagnostics.maximumScheduledPlaybackMilliseconds, 100);
+    expect(diagnostics.playbackMetrics.queuedMilliseconds, 50);
+    expect(diagnostics.playbackMetrics.maximumQueueMilliseconds, 1500);
+    expect(diagnostics.playbackMetrics.droppedChunks, 2);
+    expect(diagnostics.playbackMetricsAvailable, isTrue);
+
+    final String report = diagnostics.toRedactedText();
+    expect(report, isNot(contains('secret source')));
+    expect(report, isNot(contains('秘密译文')));
+    expect(report, isNot(contains('stored-key')));
+    expect(report, contains('不含 Key、音频或对话内容'));
+
+    nowMicros = 1300000;
+    await controller.stopConversation();
+    nowMicros = 2000000;
+    final ConversationDiagnostics stopped = await controller
+        .collectDiagnostics();
+    expect(stopped.sessionDurationMilliseconds, 300);
+    controller.dispose();
+  });
 }
 
 Future<void> _flushEvents() => Future<void>.delayed(Duration.zero);
@@ -418,15 +650,19 @@ class _MemoryKeyStore implements ApiKeyStore {
 }
 
 class _FakeAudioCapture implements AudioCaptureGateway {
-  _FakeAudioCapture({this.permission = true});
+  _FakeAudioCapture({this.permission = true, this.startError});
 
   final bool permission;
+  final Object? startError;
   final StreamController<Uint8List> _controller =
       StreamController<Uint8List>.broadcast(sync: true);
   bool started = false;
   bool stopped = false;
+  int startCount = 0;
 
   void emit(List<int> bytes) => _controller.add(Uint8List.fromList(bytes));
+
+  void emitError(Object error) => _controller.addError(error);
 
   @override
   Future<void> dispose() async => _controller.close();
@@ -437,6 +673,11 @@ class _FakeAudioCapture implements AudioCaptureGateway {
   @override
   Future<Stream<Uint8List>> start() async {
     started = true;
+    startCount += 1;
+    final Object? error = startError;
+    if (error != null) {
+      throw error;
+    }
     return _controller.stream;
   }
 
@@ -445,10 +686,15 @@ class _FakeAudioCapture implements AudioCaptureGateway {
 }
 
 class _FakePlayback implements PcmPlaybackGateway {
-  _FakePlayback({this.enqueueGate, this.failNextEnqueue = false});
+  _FakePlayback({
+    this.enqueueGate,
+    this.failNextEnqueue = false,
+    this.playbackMetrics = const PcmPlaybackMetrics.empty(),
+  });
 
   final Completer<void>? enqueueGate;
   bool failNextEnqueue;
+  final PcmPlaybackMetrics playbackMetrics;
   final List<List<int>> enqueued = <List<int>>[];
   final List<String> operations = <String>[];
 
@@ -471,12 +717,17 @@ class _FakePlayback implements PcmPlaybackGateway {
 
   @override
   Future<void> flush() async => operations.add('flush');
+
+  @override
+  Future<PcmPlaybackMetrics> metrics() async => playbackMetrics;
 }
 
 class _FakeLiveSession implements LiveTranslationSession {
-  _FakeLiveSession({this.connectGate});
+  _FakeLiveSession({this.connectGate, this.closeGate, this.connectError});
 
   final Completer<void>? connectGate;
+  final Completer<void>? closeGate;
+  final Object? connectError;
   final StreamController<LiveEvent> _controller =
       StreamController<LiveEvent>.broadcast(sync: true);
   final List<List<int>> audio = <List<int>>[];
@@ -495,6 +746,10 @@ class _FakeLiveSession implements LiveTranslationSession {
   @override
   Future<void> connect() async {
     await connectGate?.future;
+    final Object? error = connectError;
+    if (error != null) {
+      throw error;
+    }
     if (!closed) {
       _ready = true;
     }
@@ -508,6 +763,9 @@ class _FakeLiveSession implements LiveTranslationSession {
     closeCount += 1;
     closed = true;
     _ready = false;
-    await _controller.close();
+    await closeGate?.future;
+    if (!_controller.isClosed) {
+      await _controller.close();
+    }
   }
 }

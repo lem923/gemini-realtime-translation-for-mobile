@@ -10,6 +10,7 @@ import '../live_translate/live_event.dart';
 import '../live_translate/live_translation_session.dart';
 import '../security/api_key_store.dart';
 import '../shared/translation_language.dart';
+import 'conversation_diagnostics.dart';
 import 'conversation_models.dart';
 
 class ConversationController extends ChangeNotifier {
@@ -64,6 +65,21 @@ class ConversationController extends ChangeNotifier {
   int _scheduledPlaybackEndMicros = 0;
   int _conversationGeneration = 0;
   int _turnId = 0;
+  int? _diagnosticStartedMicros;
+  int? _diagnosticStoppedMicros;
+  int? _firstSourceTextMilliseconds;
+  int? _firstTranslatedTextMilliseconds;
+  int? _firstTranslatedAudioMilliseconds;
+  int _microphoneChunksSent = 0;
+  int _microphoneChunksSuppressed = 0;
+  int _outputAudioChunks = 0;
+  int _outputAudioBytes = 0;
+  int _diagnosticCompletedTurns = 0;
+  int _directionSwitches = 0;
+  int _reconnectEvents = 0;
+  int _sessionFailures = 0;
+  int _playbackFailures = 0;
+  int _maximumScheduledPlaybackMicros = 0;
   String? _errorMessage;
   ConversationPhase _phase = ConversationPhase.needsKey;
   SpeakerSide _activeSpeaker = SpeakerSide.a;
@@ -81,7 +97,8 @@ class ConversationController extends ChangeNotifier {
   bool get isListening => _phase == ConversationPhase.listening;
   bool get isBusy =>
       _phase == ConversationPhase.connecting ||
-      _phase == ConversationPhase.reconnecting;
+      _phase == ConversationPhase.reconnecting ||
+      _stopOperation != null;
   ConversationPhase get phase => _phase;
   SpeakerSide get activeSpeaker => _activeSpeaker;
   TranslationLanguage get languageA => _languageA;
@@ -184,6 +201,7 @@ class ConversationController extends ChangeNotifier {
     }
     _phase = ConversationPhase.connecting;
     _errorMessage = null;
+    _resetDiagnostics(_monotonicMicros());
     final int generation = ++_conversationGeneration;
     notifyListeners();
     try {
@@ -219,9 +237,7 @@ class ConversationController extends ChangeNotifier {
       _captureSubscription = stream.listen(
         _routeMicrophoneChunk,
         onError: (Object error, StackTrace stackTrace) {
-          _phase = ConversationPhase.failed;
-          _errorMessage = '麦克风采集失败，请停止后重试';
-          notifyListeners();
+          _terminateConversation('麦克风采集失败，请重试');
         },
         cancelOnError: false,
       );
@@ -233,10 +249,9 @@ class ConversationController extends ChangeNotifier {
       if (!_isCurrentConversation(generation)) {
         return;
       }
-      _phase = ConversationPhase.failed;
-      _errorMessage ??= '无法启动翻译，请检查网络和 API Key';
-      notifyListeners();
-      await _audioCapture.stop();
+      final String message = _errorMessage ?? '无法启动翻译，请检查网络和 API Key';
+      _terminateConversation(message);
+      await _stopOperation;
     }
   }
 
@@ -261,10 +276,18 @@ class ConversationController extends ChangeNotifier {
   }
 
   void _routeMicrophoneChunk(Uint8List chunk) {
-    if (!isListening || _monotonicMicros() < _captureBlockedUntilMicros) {
+    if (!isListening) {
       return;
     }
-    _sessions[_activeSpeaker]?.sendAudio(chunk);
+    if (_monotonicMicros() < _captureBlockedUntilMicros) {
+      _microphoneChunksSuppressed += 1;
+      return;
+    }
+    final LiveTranslationSession? session = _sessions[_activeSpeaker];
+    if (session?.isReady == true) {
+      _microphoneChunksSent += 1;
+      session!.sendAudio(chunk);
+    }
   }
 
   void _handleLiveEvent(SpeakerSide side, LiveEvent event) {
@@ -273,18 +296,30 @@ class ConversationController extends ChangeNotifier {
     }
     switch (event) {
       case LiveInputTranscript(:final String text):
+        if (side == _activeSpeaker) {
+          _firstSourceTextMilliseconds ??= _elapsedDiagnosticMilliseconds();
+        }
         _sourceTranscripts[side]!.add(text);
         if (side == _activeSpeaker) {
           notifyListeners();
         }
       case LiveOutputTranscript(:final String text):
+        if (side == _activeSpeaker) {
+          _firstTranslatedTextMilliseconds ??= _elapsedDiagnosticMilliseconds();
+        }
         _translatedTranscripts[side]!.add(text);
         if (side == _activeSpeaker) {
           notifyListeners();
         }
       case LiveAudioChunk(:final Uint8List bytes):
-        if (side == _activeSpeaker && !_audioMuted) {
-          _queuePlayback(bytes);
+        if (side == _activeSpeaker) {
+          _firstTranslatedAudioMilliseconds ??=
+              _elapsedDiagnosticMilliseconds();
+          _outputAudioChunks += 1;
+          _outputAudioBytes += bytes.length;
+          if (!_audioMuted) {
+            _queuePlayback(bytes);
+          }
         }
       case LiveTurnComplete():
         _commitTurn(side);
@@ -297,6 +332,7 @@ class ConversationController extends ChangeNotifier {
           return;
         }
         if (phase == LiveSessionPhase.reconnecting) {
+          _reconnectEvents += 1;
           _phase = ConversationPhase.reconnecting;
         } else if (phase == LiveSessionPhase.ready &&
             _captureSubscription != null) {
@@ -310,11 +346,14 @@ class ConversationController extends ChangeNotifier {
         :final bool retryable,
       ):
         if (side == _activeSpeaker) {
-          _errorMessage = userMessage;
-          _phase = authenticationFailure || !retryable
-              ? ConversationPhase.failed
-              : ConversationPhase.reconnecting;
-          notifyListeners();
+          _sessionFailures += 1;
+          if (authenticationFailure || !retryable) {
+            _terminateConversation(userMessage);
+          } else {
+            _errorMessage = userMessage;
+            _phase = ConversationPhase.reconnecting;
+            notifyListeners();
+          }
         }
       case LiveResumptionHandle() || LiveGoAway():
         break;
@@ -329,6 +368,10 @@ class ConversationController extends ChangeNotifier {
     final int now = _monotonicMicros();
     final int playbackStart = math.max(now, _scheduledPlaybackEndMicros);
     _scheduledPlaybackEndMicros = playbackStart + durationMicros;
+    _maximumScheduledPlaybackMicros = math.max(
+      _maximumScheduledPlaybackMicros,
+      _scheduledPlaybackEndMicros - now,
+    );
     _captureBlockedUntilMicros =
         _scheduledPlaybackEndMicros + _playbackEchoGuardMicros;
     _appendPlayback(() => _playback.enqueue(bytes));
@@ -362,6 +405,7 @@ class ConversationController extends ChangeNotifier {
       return;
     }
     _playbackFailureReported = true;
+    _playbackFailures += 1;
     _audioMuted = true;
     _resetPlaybackTimeline();
     _errorMessage = '译音播放失败，文字翻译仍可继续';
@@ -394,6 +438,7 @@ class ConversationController extends ChangeNotifier {
     if (_turns.length > maxHistoryTurns) {
       _turns.removeRange(0, _turns.length - maxHistoryTurns);
     }
+    _diagnosticCompletedTurns += 1;
     source.clear();
     translated.clear();
     notifyListeners();
@@ -402,6 +447,9 @@ class ConversationController extends ChangeNotifier {
   Future<void> selectSpeaker(SpeakerSide side) async {
     if (side == _activeSpeaker) {
       return;
+    }
+    if (_diagnosticStartedMicros != null && _diagnosticStoppedMicros == null) {
+      _directionSwitches += 1;
     }
     _commitTurn(_activeSpeaker);
     _activeSpeaker = side;
@@ -419,8 +467,7 @@ class ConversationController extends ChangeNotifier {
         }
       } catch (_) {
         if (_isCurrentConversation(generation) && side == _activeSpeaker) {
-          _phase = ConversationPhase.failed;
-          _errorMessage = '切换方向失败，请检查连接后重试';
+          _terminateConversation('切换方向失败，请检查连接后重试');
         }
       }
     }
@@ -476,23 +523,45 @@ class ConversationController extends ChangeNotifier {
   }
 
   Future<void> stopConversation({bool preserveError = false}) {
+    return _stopConversationWithOutcome(preserveError: preserveError);
+  }
+
+  Future<void> _stopConversationWithOutcome({
+    required bool preserveError,
+    ConversationPhase? finalPhase,
+    String? finalError,
+  }) {
     final Future<void>? inFlight = _stopOperation;
     if (inFlight != null) {
       return inFlight;
     }
     late final Future<void> operation;
-    operation = _stopConversationInternal(preserveError: preserveError)
-        .whenComplete(() {
+    operation =
+        _stopConversationInternal(
+          preserveError: preserveError,
+          finalPhase: finalPhase,
+          finalError: finalError,
+        ).whenComplete(() {
           if (identical(_stopOperation, operation)) {
             _stopOperation = null;
+            if (!_disposed) {
+              notifyListeners();
+            }
           }
         });
     _stopOperation = operation;
     return operation;
   }
 
-  Future<void> _stopConversationInternal({required bool preserveError}) async {
+  Future<void> _stopConversationInternal({
+    required bool preserveError,
+    ConversationPhase? finalPhase,
+    String? finalError,
+  }) async {
     _conversationGeneration += 1;
+    if (_diagnosticStartedMicros != null) {
+      _diagnosticStoppedMicros ??= _monotonicMicros();
+    }
     _commitTurn(_activeSpeaker);
     await _captureSubscription?.cancel();
     _captureSubscription = null;
@@ -509,11 +578,34 @@ class ConversationController extends ChangeNotifier {
     await _flushPlayback();
     if (!preserveError) {
       _errorMessage = null;
+    } else if (finalError != null) {
+      _errorMessage = finalError;
     }
     if (!_disposed) {
-      _phase = hasApiKey ? ConversationPhase.idle : ConversationPhase.needsKey;
+      _phase =
+          finalPhase ??
+          (hasApiKey ? ConversationPhase.idle : ConversationPhase.needsKey);
       notifyListeners();
     }
+  }
+
+  void _terminateConversation(String message) {
+    if (_disposed) {
+      return;
+    }
+    _phase = ConversationPhase.failed;
+    _errorMessage = message;
+    if (_diagnosticStartedMicros != null) {
+      _diagnosticStoppedMicros ??= _monotonicMicros();
+    }
+    notifyListeners();
+    unawaited(
+      _stopConversationWithOutcome(
+        preserveError: true,
+        finalPhase: ConversationPhase.failed,
+        finalError: message,
+      ),
+    );
   }
 
   static SpeakerSide _otherSide(SpeakerSide side) =>
@@ -525,6 +617,73 @@ class ConversationController extends ChangeNotifier {
   static int Function() _createMonotonicClock() {
     final Stopwatch stopwatch = Stopwatch()..start();
     return () => stopwatch.elapsedMicroseconds;
+  }
+
+  Future<ConversationDiagnostics> collectDiagnostics() async {
+    PcmPlaybackMetrics playbackMetrics = const PcmPlaybackMetrics.empty();
+    bool playbackMetricsAvailable = true;
+    try {
+      playbackMetrics = await _playback.metrics();
+    } catch (_) {
+      playbackMetricsAvailable = false;
+    }
+    final int? startedMicros = _diagnosticStartedMicros;
+    final int durationMilliseconds = startedMicros == null
+        ? 0
+        : math.max(
+                0,
+                (_diagnosticStoppedMicros ?? _monotonicMicros()) -
+                    startedMicros,
+              ) ~/
+              Duration.microsecondsPerMillisecond;
+    return ConversationDiagnostics(
+      phase: _phase,
+      sessionDurationMilliseconds: durationMilliseconds,
+      microphoneChunksSent: _microphoneChunksSent,
+      microphoneChunksSuppressed: _microphoneChunksSuppressed,
+      outputAudioChunks: _outputAudioChunks,
+      outputAudioBytes: _outputAudioBytes,
+      completedTurns: _diagnosticCompletedTurns,
+      directionSwitches: _directionSwitches,
+      reconnectEvents: _reconnectEvents,
+      sessionFailures: _sessionFailures,
+      playbackFailures: _playbackFailures,
+      firstSourceTextMilliseconds: _firstSourceTextMilliseconds,
+      firstTranslatedTextMilliseconds: _firstTranslatedTextMilliseconds,
+      firstTranslatedAudioMilliseconds: _firstTranslatedAudioMilliseconds,
+      maximumScheduledPlaybackMilliseconds:
+          _maximumScheduledPlaybackMicros ~/
+          Duration.microsecondsPerMillisecond,
+      playbackMetrics: playbackMetrics,
+      playbackMetricsAvailable: playbackMetricsAvailable,
+    );
+  }
+
+  void _resetDiagnostics(int startedMicros) {
+    _diagnosticStartedMicros = startedMicros;
+    _diagnosticStoppedMicros = null;
+    _firstSourceTextMilliseconds = null;
+    _firstTranslatedTextMilliseconds = null;
+    _firstTranslatedAudioMilliseconds = null;
+    _microphoneChunksSent = 0;
+    _microphoneChunksSuppressed = 0;
+    _outputAudioChunks = 0;
+    _outputAudioBytes = 0;
+    _diagnosticCompletedTurns = 0;
+    _directionSwitches = 0;
+    _reconnectEvents = 0;
+    _sessionFailures = 0;
+    _playbackFailures = 0;
+    _maximumScheduledPlaybackMicros = 0;
+  }
+
+  int _elapsedDiagnosticMilliseconds() {
+    final int? startedMicros = _diagnosticStartedMicros;
+    if (startedMicros == null) {
+      return 0;
+    }
+    return math.max(0, _monotonicMicros() - startedMicros) ~/
+        Duration.microsecondsPerMillisecond;
   }
 
   @override

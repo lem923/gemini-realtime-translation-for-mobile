@@ -25,10 +25,15 @@ typedef LiveSessionFactory =
     });
 
 class GeminiLiveSession implements LiveTranslationSession {
-  GeminiLiveSession({required this.apiKey, required this.targetLanguageCode});
+  GeminiLiveSession({
+    required this.apiKey,
+    required this.targetLanguageCode,
+    Uri? endpoint,
+  }) : endpoint = endpoint ?? Uri.parse(GeminiLiveProtocol.endpoint);
 
   final String apiKey;
   final String targetLanguageCode;
+  final Uri endpoint;
   final StreamController<LiveEvent> _events =
       StreamController<LiveEvent>.broadcast();
 
@@ -89,9 +94,7 @@ class GeminiLiveSession implements LiveTranslationSession {
       ..findProxy = _findProxyForWebSocket;
     _httpClient = httpClient;
     final IOWebSocketChannel channel = IOWebSocketChannel.connect(
-      Uri.parse(
-        GeminiLiveProtocol.endpoint,
-      ).replace(queryParameters: <String, String>{'key': apiKey}),
+      endpoint.replace(queryParameters: <String, String>{'key': apiKey}),
       pingInterval: const Duration(seconds: 20),
       connectTimeout: const Duration(seconds: 15),
       customClient: httpClient,
@@ -99,6 +102,12 @@ class GeminiLiveSession implements LiveTranslationSession {
     _channel = channel;
     final Completer<void> setupCompleter = Completer<void>();
     _setupCompleter = setupCompleter;
+    final Future<void> setupFuture = setupCompleter.future;
+    // The socket can close while `channel.ready` is still pending. Attach an
+    // error observer immediately so that completing the setup future in that
+    // window is not reported as an unhandled asynchronous error. The original
+    // future remains erroneous and is still awaited below by the state machine.
+    unawaited(setupFuture.catchError((Object _) {}));
     _subscription = channel.stream.listen(
       (Object? data) => _handlePayload(data, generation),
       onError: (Object error, StackTrace stackTrace) {
@@ -119,7 +128,7 @@ class GeminiLiveSession implements LiveTranslationSession {
           resumptionHandle: _resumptionHandle,
         ),
       );
-      await setupCompleter.future.timeout(const Duration(seconds: 15));
+      await setupFuture.timeout(const Duration(seconds: 15));
       _reconnectAttempt = 0;
     } on TimeoutException {
       _emitFailure('连接 Gemini 超时，请检查网络后重试', retryable: _reconnectAttempt > 0);
