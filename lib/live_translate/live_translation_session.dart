@@ -79,13 +79,11 @@ class GeminiLiveSession implements LiveTranslationSession {
     _reconnectTimer?.cancel();
     _ready = false;
     final int generation = ++_generation;
-    _events.add(
-      LivePhaseChanged(
-        _reconnectAttempt == 0
-            ? LiveSessionPhase.connecting
-            : LiveSessionPhase.reconnecting,
-      ),
-    );
+    // Reconnect scheduling announces the phase immediately, before backoff.
+    // Do not announce it again when the timer starts the actual connection.
+    if (_reconnectAttempt == 0) {
+      _events.add(const LivePhaseChanged(LiveSessionPhase.connecting));
+    }
     await _replaceChannel(generation);
     if (_disposed || generation != _generation) {
       return;
