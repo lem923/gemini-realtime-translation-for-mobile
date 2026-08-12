@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-08-13
+
+### Added
+
+- Added an iOS-ready microphone-permission gateway with read-only status,
+  native change events, and app-settings navigation.
+- Added recoverable permission actions in both the error banner and primary
+  control, including automatic status refresh after returning from settings.
+- Added live-region status/error semantics, explicit face-to-face speaker
+  labels, and 48 px minimum language/settings targets.
+- Added controller and Material widget coverage for cold-start denial,
+  in-session revocation cleanup, recovery, settings navigation, and accessible
+  state announcements.
+
+### Fixed
+
+- Runtime microphone revocation now terminates capture, Gemini sessions, and
+  playback immediately instead of leaving a stale listening session.
+- Restoring a remembered key no longer risks requesting microphone permission
+  during application initialization.
+
 ## [0.7.0] - 2026-08-13
 
 ### Added
