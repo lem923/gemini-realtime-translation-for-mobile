@@ -45,15 +45,15 @@ void main() {
   });
 
   test('serializes resumption and parses a resumable go-away notice', () {
+    final Object? decoded = jsonDecode(
+      GeminiLiveProtocol.setupMessage(
+        targetLanguageCode: 'en',
+        resumptionHandle: 'resume-handle',
+      ),
+    );
+    final Map<String, Object?> root = decoded! as Map<String, Object?>;
     final Map<String, Object?> setup =
-        (jsonDecode(
-                  GeminiLiveProtocol.setupMessage(
-                    targetLanguageCode: 'en',
-                    resumptionHandle: 'resume-handle',
-                  ),
-                )
-                as Map<String, Object?>)['setup']
-            as Map<String, Object?>;
+        root['setup']! as Map<String, Object?>;
     expect(setup['sessionResumption'], <String, Object?>{
       'handle': 'resume-handle',
     });
