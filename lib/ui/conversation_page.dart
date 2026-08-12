@@ -213,10 +213,25 @@ class _StatusStrip extends StatelessWidget {
         Icons.mic_rounded,
         Theme.of(context).colorScheme.primary,
       ),
+      ConversationPhase.translating => (
+        '正在翻译为 ${controller.activeTargetLanguage.name}',
+        Icons.graphic_eq_rounded,
+        Theme.of(context).colorScheme.primary,
+      ),
       ConversationPhase.reconnecting => (
         '连接恢复中',
         Icons.sync_rounded,
         Theme.of(context).colorScheme.secondary,
+      ),
+      ConversationPhase.offline => (
+        controller.isBusy ? '网络不可用，等待恢复' : '当前处于离线状态',
+        Icons.cloud_off_outlined,
+        Theme.of(context).colorScheme.error,
+      ),
+      ConversationPhase.rateLimited => (
+        'API 配额或并发受限',
+        Icons.hourglass_top_rounded,
+        Theme.of(context).colorScheme.error,
       ),
       ConversationPhase.permissionDenied => (
         '麦克风权限被拒绝',
@@ -731,6 +746,15 @@ class _ControlDock extends StatelessWidget {
         ? '正在回放译音…'
         : controller.isListening
         ? '停止翻译'
+        : controller.canStopConversation &&
+              controller.phase == ConversationPhase.connecting
+        ? '取消连接'
+        : controller.canStopConversation
+        ? '停止等待网络'
+        : controller.phase == ConversationPhase.offline
+        ? '重新连接'
+        : controller.phase == ConversationPhase.rateLimited
+        ? '稍后重试'
         : busy
         ? '正在连接…'
         : '开始翻译';
@@ -738,8 +762,12 @@ class _ControlDock extends StatelessWidget {
         ? Icons.key_rounded
         : controller.replayingTurnId != null
         ? Icons.volume_up_rounded
-        : controller.isListening
+        : controller.canStopConversation
         ? Icons.stop_rounded
+        : controller.phase == ConversationPhase.offline
+        ? Icons.cloud_off_outlined
+        : controller.phase == ConversationPhase.rateLimited
+        ? Icons.hourglass_top_rounded
         : Icons.mic_rounded;
     return SafeArea(
       minimum: const EdgeInsets.fromLTRB(16, 8, 16, 12),
@@ -759,12 +787,12 @@ class _ControlDock extends StatelessWidget {
         child: SizedBox(
           height: 58,
           child: FilledButton.icon(
-            onPressed: busy
+            onPressed: busy && !controller.canStopConversation
                 ? null
                 : () {
                     if (!controller.hasApiKey) {
                       onNeedsKey();
-                    } else if (controller.isListening) {
+                    } else if (controller.canStopConversation) {
                       unawaited(controller.stopConversation());
                     } else {
                       unawaited(controller.startConversation());

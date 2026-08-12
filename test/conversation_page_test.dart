@@ -78,6 +78,57 @@ void main() {
     );
   });
 
+  testWidgets('shows translating and offline recovery states', (
+    WidgetTester tester,
+  ) async {
+    final List<_NoopLiveSession> sessions = <_NoopLiveSession>[];
+    final ConversationController controller = ConversationController(
+      keyStore: _StoredKeyStore(),
+      audioCapture: _NoopAudioCapture(),
+      playback: _NoopPlayback(),
+      sessionFactory:
+          ({required String apiKey, required String targetLanguageCode}) {
+            final _NoopLiveSession session = _NoopLiveSession();
+            sessions.add(session);
+            return session;
+          },
+    );
+    await controller.initialize();
+    await controller.startConversation();
+    await tester.pumpWidget(
+      MaterialApp(home: ConversationPage(controller: controller)),
+    );
+    await tester.pump();
+
+    sessions.first.emit(const LiveOutputTranscript('Hello', 'en'));
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('正在翻译为 English'), findsOneWidget);
+    expect(find.text('停止翻译'), findsOneWidget);
+
+    sessions.first.emit(const LiveTurnComplete());
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('正在聆听 简体中文'), findsOneWidget);
+    sessions.first.emit(
+      const LiveSessionFailure(
+        userMessage: '网络连接中断，恢复后将自动重连',
+        authenticationFailure: false,
+        retryable: true,
+        kind: LiveFailureKind.offline,
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('网络不可用，等待恢复'), findsOneWidget);
+    expect(find.text('停止等待网络'), findsOneWidget);
+    expect(
+      tester.widget<FilledButton>(find.byType(FilledButton).last).onPressed,
+      isNotNull,
+    );
+    controller.dispose();
+  });
+
   testWidgets('shows a redacted Material diagnostics report', (
     WidgetTester tester,
   ) async {
