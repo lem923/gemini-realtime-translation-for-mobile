@@ -28,4 +28,9 @@ jobs:
       - name: Test
         run: flutter test --coverage
       - name: Build Android debug APK
-        run: flutter build apk --debug
+        run: |
+          for attempt in 1 2 3; do
+            flutter build apk --debug && exit 0
+            if [ "$attempt" -eq 3 ]; then exit 1; fi
+            sleep $((attempt * 10))
+          done
