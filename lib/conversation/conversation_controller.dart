@@ -9,6 +9,7 @@ import '../audio/audio_constants.dart';
 import '../audio/pcm_playback_gateway.dart';
 import '../live_translate/live_event.dart';
 import '../live_translate/live_translation_session.dart';
+import '../permissions/microphone_permission_gateway.dart';
 import '../preferences/language_pair_store.dart';
 import '../security/api_key_store.dart';
 import '../shared/translation_language.dart';
@@ -21,6 +22,7 @@ class ConversationController extends ChangeNotifier {
     AudioCaptureGateway? audioCapture,
     PcmPlaybackGateway? playback,
     LanguagePairStore? languagePairStore,
+    MicrophonePermissionGateway? permissionGateway,
     LiveSessionFactory? sessionFactory,
     int Function()? monotonicMicros,
   }) : _keyStore = keyStore ?? SecureApiKeyStore(),
@@ -28,6 +30,8 @@ class ConversationController extends ChangeNotifier {
        _playback = playback ?? PlatformPcmPlaybackGateway(),
        _languagePairStore =
            languagePairStore ?? const DisabledLanguagePairStore(),
+       _permissionGateway =
+           permissionGateway ?? const DisabledMicrophonePermissionGateway(),
        _monotonicMicros = monotonicMicros ?? _createMonotonicClock(),
        _sessionFactory =
            sessionFactory ??
@@ -41,6 +45,7 @@ class ConversationController extends ChangeNotifier {
   final AudioCaptureGateway _audioCapture;
   final PcmPlaybackGateway _playback;
   final LanguagePairStore _languagePairStore;
+  final MicrophonePermissionGateway _permissionGateway;
   final LiveSessionFactory _sessionFactory;
   final int Function() _monotonicMicros;
   final Map<SpeakerSide, LiveTranslationSession> _sessions =
@@ -60,6 +65,7 @@ class ConversationController extends ChangeNotifier {
 
   StreamSubscription<Uint8List>? _captureSubscription;
   StreamSubscription<PcmPlaybackEvent>? _playbackEventSubscription;
+  StreamSubscription<bool>? _permissionSubscription;
   Future<void> _playbackChain = Future<void>.value();
   Future<void>? _stopOperation;
   Future<void>? _replayOperation;
@@ -70,6 +76,7 @@ class ConversationController extends ChangeNotifier {
   bool _disposed = false;
   bool _playbackFailureReported = false;
   bool _playbackConfigured = false;
+  bool _microphonePermissionGrantedOnce = false;
   int _captureBlockedUntilMicros = 0;
   int _scheduledPlaybackEndMicros = 0;
   int _conversationGeneration = 0;
@@ -163,6 +170,10 @@ class ConversationController extends ChangeNotifier {
       _handlePlaybackEvent,
       onError: (Object _) {},
     );
+    _permissionSubscription ??= _permissionGateway.changes.listen(
+      _handleMicrophonePermissionChanged,
+      onError: (Object _) {},
+    );
     StoredLanguagePair? storedPair;
     try {
       storedPair = await _languagePairStore.read();
@@ -192,7 +203,20 @@ class ConversationController extends ChangeNotifier {
     if (stored != null && stored.trim().isNotEmpty) {
       _apiKey = stored.trim();
       _rememberKey = true;
-      _phase = ConversationPhase.idle;
+      bool? currentPermission;
+      try {
+        currentPermission = await _permissionGateway.currentStatus();
+      } catch (_) {
+        // Permission status is advisory at startup. The explicit start action
+        // remains responsible for requesting access when status is unknown.
+      }
+      _microphonePermissionGrantedOnce = currentPermission == true;
+      if (currentPermission == false) {
+        _phase = ConversationPhase.permissionDenied;
+        _errorMessage = '需要麦克风权限才能进行语音翻译';
+      } else {
+        _phase = ConversationPhase.idle;
+      }
     } else {
       _phase = ConversationPhase.needsKey;
     }
@@ -284,6 +308,7 @@ class ConversationController extends ChangeNotifier {
         notifyListeners();
         return;
       }
+      _microphonePermissionGrantedOnce = true;
       if (!_isCurrentConversation(generation)) {
         return;
       }
@@ -331,6 +356,66 @@ class ConversationController extends ChangeNotifier {
       };
       _terminateConversation(message, phase: failurePhase);
       await _stopOperation;
+    }
+  }
+
+  void _handleMicrophonePermissionChanged(bool granted) {
+    if (_disposed) {
+      return;
+    }
+    if (granted) {
+      _microphonePermissionGrantedOnce = true;
+      if (_phase == ConversationPhase.permissionDenied &&
+          _stopOperation == null) {
+        _phase = hasApiKey
+            ? ConversationPhase.idle
+            : ConversationPhase.needsKey;
+        _errorMessage = null;
+        notifyListeners();
+      }
+      return;
+    }
+    if (!_microphonePermissionGrantedOnce &&
+        _phase != ConversationPhase.permissionDenied) {
+      return;
+    }
+    _microphonePermissionGrantedOnce = false;
+    const String message = '麦克风权限已被撤销，翻译已停止';
+    if (canStopConversation || _captureSubscription != null) {
+      _terminateConversation(
+        message,
+        phase: ConversationPhase.permissionDenied,
+      );
+    } else if (_phase != ConversationPhase.needsKey) {
+      _phase = ConversationPhase.permissionDenied;
+      _errorMessage = message;
+      notifyListeners();
+    }
+  }
+
+  Future<void> refreshMicrophonePermission() async {
+    if (_disposed ||
+        (!_microphonePermissionGrantedOnce &&
+            _phase != ConversationPhase.permissionDenied)) {
+      return;
+    }
+    try {
+      final bool? granted = await _permissionGateway.currentStatus();
+      if (granted != null) {
+        _handleMicrophonePermissionChanged(granted);
+      }
+    } catch (_) {
+      // The native permission event remains authoritative. A lifecycle probe
+      // failure must not stop an otherwise healthy conversation.
+    }
+  }
+
+  Future<void> openMicrophoneSettings() async {
+    try {
+      await _permissionGateway.openAppSettings();
+    } catch (_) {
+      _errorMessage = '无法打开系统设置，请手动为本应用开启麦克风权限';
+      notifyListeners();
     }
   }
 
@@ -1114,6 +1199,8 @@ class ConversationController extends ChangeNotifier {
     await stopReplay();
     await _playbackEventSubscription?.cancel();
     _playbackEventSubscription = null;
+    await _permissionSubscription?.cancel();
+    _permissionSubscription = null;
     await _captureSubscription?.cancel();
     await _audioCapture.dispose();
     for (final StreamSubscription<LiveEvent> subscription

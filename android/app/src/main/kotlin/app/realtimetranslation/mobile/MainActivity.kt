@@ -1,13 +1,20 @@
 package app.realtimetranslation.mobile
 
+import android.Manifest
 import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.AudioDeviceInfo
 import android.media.AudioFocusRequest
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioTrack
+import android.net.Uri
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.provider.Settings
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.plugin.common.EventChannel
@@ -20,6 +27,20 @@ import kotlin.math.max
 class MainActivity : FlutterActivity() {
     private var player: PcmStreamPlayer? = null
     private var audioEventSink: EventChannel.EventSink? = null
+    private var permissionEventSink: EventChannel.EventSink? = null
+    private val permissionHandler = Handler(Looper.getMainLooper())
+    private var lastPermissionState: Boolean? = null
+    private val permissionPoll = object : Runnable {
+        override fun run() {
+            if (permissionEventSink == null) return
+            val granted = isMicrophonePermissionGranted()
+            if (granted != lastPermissionState) {
+                lastPermissionState = granted
+                permissionEventSink?.success(granted)
+            }
+            permissionHandler.postDelayed(this, PERMISSION_POLL_MILLISECONDS)
+        }
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -39,6 +60,39 @@ class MainActivity : FlutterActivity() {
                 audioEventSink = null
             }
         })
+        EventChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "app.realtimetranslation/permission_events",
+        ).setStreamHandler(object : EventChannel.StreamHandler {
+            override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+                permissionEventSink = events
+                lastPermissionState = null
+                permissionHandler.removeCallbacks(permissionPoll)
+                permissionPoll.run()
+            }
+
+            override fun onCancel(arguments: Any?) {
+                permissionEventSink = null
+                permissionHandler.removeCallbacks(permissionPoll)
+            }
+        })
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "app.realtimetranslation/permissions",
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "isGranted" -> result.success(isMicrophonePermissionGranted())
+                "openAppSettings" -> {
+                    val intent = Intent(
+                        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        Uri.parse("package:$packageName"),
+                    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    startActivity(intent)
+                    result.success(null)
+                }
+                else -> result.notImplemented()
+            }
+        }
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             "app.realtimetranslation/audio",
@@ -79,9 +133,19 @@ class MainActivity : FlutterActivity() {
 
     override fun onDestroy() {
         audioEventSink = null
+        permissionEventSink = null
+        permissionHandler.removeCallbacks(permissionPoll)
         player?.dispose()
         player = null
         super.onDestroy()
+    }
+
+    private fun isMicrophonePermissionGranted(): Boolean =
+        checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+
+    private companion object {
+        const val PERMISSION_POLL_MILLISECONDS = 750L
     }
 }
 

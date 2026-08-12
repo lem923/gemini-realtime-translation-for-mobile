@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
 import '../conversation/conversation_controller.dart';
+import '../permissions/microphone_permission_gateway.dart';
 import '../preferences/language_pair_store.dart';
 import '../ui/conversation_page.dart';
 
@@ -22,6 +23,7 @@ class _RealtimeTranslationAppState extends State<RealtimeTranslationApp> {
     super.initState();
     _controller = ConversationController(
       languagePairStore: SharedPreferencesLanguagePairStore(),
+      permissionGateway: const PlatformMicrophonePermissionGateway(),
     );
     unawaited(_controller.initialize());
   }
