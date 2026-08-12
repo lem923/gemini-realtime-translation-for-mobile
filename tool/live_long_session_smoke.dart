@@ -48,6 +48,7 @@ Future<void> main(List<String> arguments) async {
   int promptTokens = 0;
   int responseTokens = 0;
   int totalTokens = 0;
+  int mediaChunksSent = 0;
 
   void completeWhenOutputArrives() {
     if (inputTranscriptCharacters > 0 &&
@@ -82,9 +83,9 @@ Future<void> main(List<String> arguments) async {
         outputAudioBytes += bytes.length;
         completeWhenOutputArrives();
       case LiveUsageMetadata():
-        promptTokens = event.promptTokenCount;
-        responseTokens = event.responseTokenCount;
-        totalTokens = event.totalTokenCount;
+        promptTokens += event.promptTokenCount;
+        responseTokens += event.responseTokenCount;
+        totalTokens += event.totalTokenCount;
       case LiveSessionFailure():
         failureEvents += 1;
       default:
@@ -95,17 +96,27 @@ Future<void> main(List<String> arguments) async {
   try {
     await session.connect();
     final Stopwatch idleWatch = Stopwatch()..start();
+    final Uint8List silence = Uint8List(3200);
+    var nextProgressSeconds = 60;
     while (idleWatch.elapsed.inSeconds < idleSeconds) {
-      final int remaining = idleSeconds - idleWatch.elapsed.inSeconds;
-      await Future<void>.delayed(Duration(seconds: remaining.clamp(1, 60)));
-      stdout.writeln(
-        'long_session_progress '
-        'elapsed_seconds=${idleWatch.elapsed.inSeconds.clamp(0, idleSeconds)} '
-        'ready=${session.isReady} '
-        'ready_events=$readyEvents '
-        'reconnect_events=$reconnectEvents '
-        'failure_events=$failureEvents',
-      );
+      if (session.isReady) {
+        session.sendAudio(silence);
+        mediaChunksSent += 1;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      if (idleWatch.elapsed.inSeconds >= nextProgressSeconds ||
+          idleWatch.elapsed.inSeconds >= idleSeconds) {
+        stdout.writeln(
+          'long_session_progress '
+          'elapsed_seconds=${idleWatch.elapsed.inSeconds.clamp(0, idleSeconds)} '
+          'media_chunks_sent=$mediaChunksSent '
+          'ready=${session.isReady} '
+          'ready_events=$readyEvents '
+          'reconnect_events=$reconnectEvents '
+          'failure_events=$failureEvents',
+        );
+        nextProgressSeconds += 60;
+      }
     }
 
     if (!session.isReady) {
@@ -132,7 +143,8 @@ Future<void> main(List<String> arguments) async {
         failureEvents == 0;
     stdout.writeln(
       'long_session_smoke passed=$passed '
-      'idle_seconds=$idleSeconds '
+      'media_seconds=$idleSeconds '
+      'media_chunks_sent=$mediaChunksSent '
       'ready_events=$readyEvents '
       'reconnect_events=$reconnectEvents '
       'failure_events=$failureEvents '
@@ -149,7 +161,8 @@ Future<void> main(List<String> arguments) async {
   } on Object catch (error) {
     stderr.writeln(
       'long_session_smoke failed '
-      'idle_seconds=$idleSeconds '
+      'media_seconds=$idleSeconds '
+      'media_chunks_sent=$mediaChunksSent '
       'ready=${session.isReady} '
       'ready_events=$readyEvents '
       'reconnect_events=$reconnectEvents '
