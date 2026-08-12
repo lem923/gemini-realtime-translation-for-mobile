@@ -10,6 +10,7 @@ import 'package:realtime_translation/conversation/conversation_diagnostics.dart'
 import 'package:realtime_translation/conversation/conversation_models.dart';
 import 'package:realtime_translation/live_translate/live_event.dart';
 import 'package:realtime_translation/live_translate/live_translation_session.dart';
+import 'package:realtime_translation/permissions/microphone_permission_gateway.dart';
 import 'package:realtime_translation/preferences/language_pair_store.dart';
 import 'package:realtime_translation/security/api_key_store.dart';
 import 'package:realtime_translation/shared/translation_language.dart';
@@ -116,6 +117,43 @@ void main() {
       expect(controller.phase, ConversationPhase.permissionDenied);
       expect(controller.errorMessage, contains('麦克风权限'));
       expect(capture.started, isFalse);
+      controller.dispose();
+    },
+  );
+
+  test(
+    'restores from denied permission and stops immediately when revoked',
+    () async {
+      final _FakeAudioCapture capture = _FakeAudioCapture();
+      final _FakeMicrophonePermissionGateway permissions =
+          _FakeMicrophonePermissionGateway(false);
+      final ConversationController controller = ConversationController(
+        keyStore: _MemoryKeyStore('stored-key'),
+        audioCapture: capture,
+        playback: _FakePlayback(),
+        permissionGateway: permissions,
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) =>
+                _FakeLiveSession(),
+      );
+
+      await controller.initialize();
+      expect(controller.phase, ConversationPhase.permissionDenied);
+      expect(capture.started, isFalse);
+
+      permissions.emit(true);
+      expect(controller.phase, ConversationPhase.idle);
+      await controller.startConversation();
+      expect(controller.phase, ConversationPhase.listening);
+
+      permissions.emit(false);
+      await _flushEvents();
+      expect(controller.phase, ConversationPhase.permissionDenied);
+      expect(controller.errorMessage, contains('已被撤销'));
+      expect(capture.stopped, isTrue);
+
+      await controller.openMicrophoneSettings();
+      expect(permissions.openSettingsCount, 1);
       controller.dispose();
     },
   );
@@ -1254,6 +1292,32 @@ class _FakeAudioCapture implements AudioCaptureGateway {
 
   @override
   Future<void> stop() async => stopped = true;
+}
+
+class _FakeMicrophonePermissionGateway implements MicrophonePermissionGateway {
+  _FakeMicrophonePermissionGateway(this.status);
+
+  bool? status;
+  int openSettingsCount = 0;
+  final StreamController<bool> _changes = StreamController<bool>.broadcast(
+    sync: true,
+  );
+
+  void emit(bool granted) {
+    status = granted;
+    _changes.add(granted);
+  }
+
+  @override
+  Stream<bool> get changes => _changes.stream;
+
+  @override
+  Future<bool?> currentStatus() async => status;
+
+  @override
+  Future<void> openAppSettings() async {
+    openSettingsCount += 1;
+  }
 }
 
 class _FakePlayback implements PcmPlaybackGateway {

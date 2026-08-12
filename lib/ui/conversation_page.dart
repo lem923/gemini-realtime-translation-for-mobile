@@ -40,6 +40,8 @@ class _ConversationPageState extends State<ConversationPage>
     // Stopping there cancels the very microphone request that starts a session.
     if (stopsConversationForLifecycleState(state)) {
       unawaited(widget.controller.stopConversation());
+    } else if (state == AppLifecycleState.resumed) {
+      unawaited(widget.controller.refreshMicrophonePermission());
     }
   }
 
@@ -156,7 +158,17 @@ class _ConversationBody extends StatelessWidget {
               ],
               if (controller.errorMessage != null) ...<Widget>[
                 const SizedBox(height: 12),
-                _ErrorBanner(message: controller.errorMessage!),
+                _ErrorBanner(
+                  message: controller.errorMessage!,
+                  actionLabel:
+                      controller.phase == ConversationPhase.permissionDenied
+                      ? '打开系统设置'
+                      : null,
+                  onAction:
+                      controller.phase == ConversationPhase.permissionDenied
+                      ? () => unawaited(controller.openMicrophoneSettings())
+                      : null,
+                ),
               ],
               const SizedBox(height: 16),
               _LanguagePair(controller: controller),
@@ -244,28 +256,33 @@ class _StatusStrip extends StatelessWidget {
         Theme.of(context).colorScheme.error,
       ),
     };
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.11),
-          borderRadius: BorderRadius.circular(999),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            Icon(icon, size: 16, color: color),
-            const SizedBox(width: 7),
-            Text(
-              label,
-              style: TextStyle(
-                color: color,
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
+    return Semantics(
+      liveRegion: true,
+      excludeSemantics: true,
+      label: '翻译状态：$label',
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.11),
+            borderRadius: BorderRadius.circular(999),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              Icon(icon, size: 16, color: color),
+              const SizedBox(width: 7),
+              Text(
+                label,
+                style: TextStyle(
+                  color: color,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -301,29 +318,62 @@ class _SetupBanner extends StatelessWidget {
 }
 
 class _ErrorBanner extends StatelessWidget {
-  const _ErrorBanner({required this.message});
+  const _ErrorBanner({required this.message, this.actionLabel, this.onAction});
   final String message;
+  final String? actionLabel;
+  final VoidCallback? onAction;
 
   @override
   Widget build(BuildContext context) {
     final ColorScheme colors = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: colors.errorContainer,
-        borderRadius: BorderRadius.circular(18),
-      ),
-      child: Row(
-        children: <Widget>[
-          Icon(Icons.info_outline_rounded, color: colors.onErrorContainer),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              message,
-              style: TextStyle(color: colors.onErrorContainer),
+    return Semantics(
+      container: true,
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: colors.errorContainer,
+          borderRadius: BorderRadius.circular(18),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            Semantics(
+              liveRegion: true,
+              excludeSemantics: true,
+              label: '错误：$message',
+              child: Row(
+                children: <Widget>[
+                  Icon(
+                    Icons.info_outline_rounded,
+                    color: colors.onErrorContainer,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      message,
+                      style: TextStyle(color: colors.onErrorContainer),
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
-        ],
+            if (actionLabel != null && onAction != null) ...<Widget>[
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton.icon(
+                  onPressed: onAction,
+                  icon: const Icon(Icons.settings_outlined),
+                  label: Text(actionLabel!),
+                  style: TextButton.styleFrom(
+                    foregroundColor: colors.onErrorContainer,
+                    minimumSize: const Size(48, 48),
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }
@@ -435,20 +485,23 @@ class _SpeakerCard extends StatelessWidget {
               InkWell(
                 onTap: onLanguage,
                 borderRadius: BorderRadius.circular(8),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 3),
-                  child: Row(
-                    children: <Widget>[
-                      Expanded(
-                        child: Text(
-                          language.name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontWeight: FontWeight.w700),
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(minHeight: 48),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 3),
+                    child: Row(
+                      children: <Widget>[
+                        Expanded(
+                          child: Text(
+                            language.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
                         ),
-                      ),
-                      const Icon(Icons.expand_more_rounded, size: 18),
-                    ],
+                        const Icon(Icons.expand_more_rounded, size: 18),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -742,6 +795,8 @@ class _ControlDock extends StatelessWidget {
     final bool busy = controller.isBusy;
     final String label = !controller.hasApiKey
         ? '设置 API Key'
+        : controller.phase == ConversationPhase.permissionDenied
+        ? '打开麦克风设置'
         : controller.replayingTurnId != null
         ? '正在回放译音…'
         : controller.isListening
@@ -760,6 +815,8 @@ class _ControlDock extends StatelessWidget {
         : '开始翻译';
     final IconData icon = !controller.hasApiKey
         ? Icons.key_rounded
+        : controller.phase == ConversationPhase.permissionDenied
+        ? Icons.settings_outlined
         : controller.replayingTurnId != null
         ? Icons.volume_up_rounded
         : controller.canStopConversation
@@ -792,6 +849,9 @@ class _ControlDock extends StatelessWidget {
                 : () {
                     if (!controller.hasApiKey) {
                       onNeedsKey();
+                    } else if (controller.phase ==
+                        ConversationPhase.permissionDenied) {
+                      unawaited(controller.openMicrophoneSettings());
                     } else if (controller.canStopConversation) {
                       unawaited(controller.stopConversation());
                     } else {
@@ -866,58 +926,65 @@ class _FaceHalf extends StatelessWidget {
     final String text = selected && controller.interimTranslation.isNotEmpty
         ? controller.interimTranslation
         : '点击这里，让 ${language.name} 讲话';
-    return Material(
-      color: selected
-          ? accent.withValues(alpha: 0.13)
-          : colors.surfaceContainerLow,
-      borderRadius: BorderRadius.circular(28),
-      clipBehavior: Clip.antiAlias,
-      child: LayoutBuilder(
-        builder: (BuildContext context, BoxConstraints constraints) {
-          final bool compact = constraints.maxHeight < 240;
-          final double gap = compact ? 4 : 12;
-          return InkWell(
-            onTap: () => unawaited(controller.selectSpeaker(side)),
-            child: Padding(
-              padding: EdgeInsets.all(compact ? 8 : 22),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: <Widget>[
-                  Text(
-                    language.flag,
-                    style: TextStyle(fontSize: compact ? 28 : 36),
-                  ),
-                  SizedBox(height: compact ? 2 : 8),
-                  Text(
-                    language.name,
-                    style: TextStyle(
-                      color: accent,
-                      fontWeight: FontWeight.w800,
+    return Semantics(
+      button: true,
+      selected: selected,
+      excludeSemantics: true,
+      label:
+          '${side == SpeakerSide.a ? '讲话人 A' : '讲话人 B'}，${language.name}，点击切换讲话人',
+      child: Material(
+        color: selected
+            ? accent.withValues(alpha: 0.13)
+            : colors.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(28),
+        clipBehavior: Clip.antiAlias,
+        child: LayoutBuilder(
+          builder: (BuildContext context, BoxConstraints constraints) {
+            final bool compact = constraints.maxHeight < 240;
+            final double gap = compact ? 4 : 12;
+            return InkWell(
+              onTap: () => unawaited(controller.selectSpeaker(side)),
+              child: Padding(
+                padding: EdgeInsets.all(compact ? 8 : 22),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: <Widget>[
+                    Text(
+                      language.flag,
+                      style: TextStyle(fontSize: compact ? 28 : 36),
                     ),
-                  ),
-                  SizedBox(height: gap),
-                  Icon(
-                    selected ? Icons.mic_rounded : Icons.touch_app_outlined,
-                    color: accent,
-                    size: compact ? 24 : 32,
-                  ),
-                  SizedBox(height: gap),
-                  Text(
-                    text,
-                    maxLines: compact ? 2 : 4,
-                    overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.center,
-                    style:
-                        (compact
-                                ? Theme.of(context).textTheme.titleMedium
-                                : Theme.of(context).textTheme.titleLarge)
-                            ?.copyWith(fontWeight: FontWeight.w700),
-                  ),
-                ],
+                    SizedBox(height: compact ? 2 : 8),
+                    Text(
+                      language.name,
+                      style: TextStyle(
+                        color: accent,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    SizedBox(height: gap),
+                    Icon(
+                      selected ? Icons.mic_rounded : Icons.touch_app_outlined,
+                      color: accent,
+                      size: compact ? 24 : 32,
+                    ),
+                    SizedBox(height: gap),
+                    Text(
+                      text,
+                      maxLines: compact ? 2 : 4,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                      style:
+                          (compact
+                                  ? Theme.of(context).textTheme.titleMedium
+                                  : Theme.of(context).textTheme.titleLarge)
+                              ?.copyWith(fontWeight: FontWeight.w700),
+                    ),
+                  ],
+                ),
               ),
-            ),
-          );
-        },
+            );
+          },
+        ),
       ),
     );
   }

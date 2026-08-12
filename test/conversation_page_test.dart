@@ -8,6 +8,7 @@ import 'package:realtime_translation/audio/pcm_playback_gateway.dart';
 import 'package:realtime_translation/conversation/conversation_controller.dart';
 import 'package:realtime_translation/live_translate/live_event.dart';
 import 'package:realtime_translation/live_translate/live_translation_session.dart';
+import 'package:realtime_translation/permissions/microphone_permission_gateway.dart';
 import 'package:realtime_translation/security/api_key_store.dart';
 import 'package:realtime_translation/ui/conversation_page.dart';
 
@@ -78,6 +79,39 @@ void main() {
     );
   });
 
+  testWidgets('offers a recoverable and accessible denied-permission action', (
+    WidgetTester tester,
+  ) async {
+    final _NoopPermissionGateway permissions = _NoopPermissionGateway(false);
+    final ConversationController controller = ConversationController(
+      keyStore: _StoredKeyStore(),
+      audioCapture: _NoopAudioCapture(),
+      playback: _NoopPlayback(),
+      permissionGateway: permissions,
+      sessionFactory:
+          ({required String apiKey, required String targetLanguageCode}) =>
+              _NoopLiveSession(),
+    );
+    await controller.initialize();
+    await tester.pumpWidget(
+      MaterialApp(home: ConversationPage(controller: controller)),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('麦克风权限被拒绝'), findsOneWidget);
+    expect(find.text('打开系统设置'), findsOneWidget);
+    expect(find.text('打开麦克风设置'), findsOneWidget);
+    expect(
+      tester.getSemantics(find.text('麦克风权限被拒绝')),
+      matchesSemantics(label: '翻译状态：麦克风权限被拒绝', isLiveRegion: true),
+    );
+
+    await tester.tap(find.text('打开麦克风设置'));
+    await tester.pump();
+    expect(permissions.openSettingsCount, 1);
+    controller.dispose();
+  });
+
   testWidgets('shows translating and offline recovery states', (
     WidgetTester tester,
   ) async {
@@ -118,6 +152,15 @@ void main() {
         kind: LiveFailureKind.offline,
       ),
     );
+    expect(
+      tester.getSemantics(find.text('需要麦克风权限才能进行语音翻译')),
+      matchesSemantics(label: '错误：需要麦克风权限才能进行语音翻译', isLiveRegion: true),
+    );
+    final Finder bannerAction = find.ancestor(
+      of: find.text('打开系统设置'),
+      matching: find.byType(TextButton),
+    );
+    expect(tester.getSize(bannerAction).height, greaterThanOrEqualTo(48));
     await tester.pump();
     await tester.pump();
     expect(find.text('网络不可用，等待恢复'), findsOneWidget);
@@ -237,6 +280,24 @@ class _NoopAudioCapture implements AudioCaptureGateway {
 
   @override
   Future<void> stop() async {}
+}
+
+class _NoopPermissionGateway implements MicrophonePermissionGateway {
+  _NoopPermissionGateway(this.status);
+
+  bool? status;
+  int openSettingsCount = 0;
+
+  @override
+  Stream<bool> get changes => const Stream<bool>.empty();
+
+  @override
+  Future<bool?> currentStatus() async => status;
+
+  @override
+  Future<void> openAppSettings() async {
+    openSettingsCount += 1;
+  }
 }
 
 class _NoopPlayback implements PcmPlaybackGateway {
