@@ -2,7 +2,7 @@
 
 Android-first, cross-platform, ultra-low-latency, two-way speech translation for face-to-face travel conversations, powered by the Google Gemini Live API and `gemini-3.5-live-translate-preview`.
 
-> Status: Phase 0 — foundation and technical validation. No production app has been released yet.
+> Status: Android-first `0.1.0` preview. The app, native Android audio path, and real Gemini speech/text/audio pipeline are runnable; physical-device acoustic and latency hardening remains before a production release.
 
 ## Product direction
 
@@ -42,16 +42,16 @@ There is no application backend, account system, or media relay. The user owns t
 
 Automatic speaker/direction detection is intentionally out of scope. The user always controls who is currently speaking.
 
-## Planned repository layout
+## Repository layout
 
 ```text
 lib/
-  app/              # Flutter UI, navigation, settings
+  app/              # Material 3 application and dependency wiring
   conversation/     # Shared speaker/direction and transcript state
   live_translate/   # Gemini protocol, sessions, reconnect/resumption
   audio/            # Platform-neutral audio contracts and queues
 android/             # Android host and low-latency Kotlin audio adapter
-ios/                 # iOS host and Swift audio adapter contract/stubs
+ios/                 # iOS host prepared for the later Swift audio adapter
 docs/
   research/         # Source-backed technical investigations
 ```
@@ -69,9 +69,35 @@ Flutter is the accepted application framework. Android is the first implementati
 
 See the [Google Live Translation guide](https://ai.google.dev/gemini-api/docs/live-api/live-translate) for the current API contract.
 
+## Implemented in 0.1.0
+
+- Direct BYOK WebSocket connection to `gemini-3.5-live-translate-preview` with no application backend.
+- Source transcript, translated transcript, and translated 24 kHz PCM audio output.
+- Manual A/B speaker selection backed by two warm directional sessions.
+- More than 70 searchable target languages using the official BCP-47 list.
+- Standard conversation and face-to-face reading layouts, mute, history, and interruption-safe stop behavior.
+- Android 16 kHz microphone capture plus bounded native `AudioTrack` playback.
+- Memory-only key use by default and opt-in OS-backed secure storage.
+- Setup timeout, bounded reconnect, session resumption, `goAway`, and redacted user errors.
+
 ## Quick start
 
-There is no runnable application in Phase 0. See [QUICKSTART.md](QUICKSTART.md) for repository setup and the validation plan.
+```bash
+git clone https://github.com/lem923/gemini-realtime-translation-for-mobile.git
+cd gemini-realtime-translation-for-mobile
+flutter pub get
+flutter run
+```
+
+Enter your own Google AI Studio key in the app. The key's project must be able to use `gemini-3.5-live-translate-preview`. See [QUICKSTART.md](QUICKSTART.md) for Android setup, tests, APK builds, and safe live smoke testing.
+
+## Validation status
+
+- `flutter analyze`: clean.
+- Automated protocol, PCM, transcript, controller, and responsive widget tests: passing.
+- Real API smoke: 16 kHz speech input produced source text, translated text, and 24 kHz audio.
+- Android API 36 emulator: install, cold start, Key validation, microphone permission, start/stop, live session readiness, A/B switching, language search, mute, and both layouts exercised without crashes.
+- Still required before a production release: representative physical Android phones, real microphone/speaker echo tests, Bluetooth/wired routes, weak-network measurements, release-key signing, and iOS audio implementation.
 
 ## Project management
 
