@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-08-13
+
+### Added
+
+- Added privacy-safe Gemini prompt, response, and total Token counters to the
+  in-app diagnostic report, aggregated across both warm directions and reset at
+  each conversation start.
+- Added a secret-safe long-session smoke tool that sends production-paced PCM
+  for 21 minutes before requiring source text, translated text, and translated
+  PCM.
+
+### Changed
+
+- Enabled Live API sliding-window context compression so audio sessions are not
+  constrained by the service's default uncompressed context duration.
+- Extended the real API smoke report with non-sensitive usage counters.
+
+### Fixed
+
+- Normalized local replacement closes to WebSocket code `1000`, preventing an
+  unhandled Dart exception when Gemini rotates a long-running connection with
+  server code `1001 Going Away`.
+- Removed the duplicate reconnect-phase notification emitted while a scheduled
+  retry actually started, keeping diagnostics at one event per retry attempt.
+
+### Tests
+
+- Added protocol fixtures for context compression and defensive usage-metadata
+  parsing, plus per-response aggregation coverage across both directions.
+- Added a logical 20-minute, 12,000-chunk, 240-turn media run that verifies
+  bounded history, replay eviction, output accounting, and muted playback.
+- Passed a real 21-minute, 12,212-chunk Live API run through two server
+  connection rotations with zero failures, followed by successful source text,
+  translated text, and translated audio output.
+- Added a local WebSocket regression that performs a real `1001` server close,
+  reconnects, reaches ready again, and proves no asynchronous error escapes.
+- Added structural coverage for resumption-handle serialization and resumable
+  `goAway` parsing.
+- Expanded the automated suite to 61 passing tests.
+
 ## [0.10.0] - 2026-08-13
 
 ### Changed

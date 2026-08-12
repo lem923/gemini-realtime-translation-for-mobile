@@ -5,7 +5,7 @@ The repository contains a runnable Android-first Flutter preview. iOS support fo
 ## Prerequisites
 
 - Git 2.40+
-- Flutter 3.44 or later with its bundled Dart SDK
+- Flutter 3.47.0 with its bundled Dart 3.13 SDK
 - Android SDK 36 or later, JDK 17, and an emulator or physical Android device
 - Xcode and a physical iPhone are required when the iOS adapter phase begins
 - A Gemini API key with access to `gemini-3.5-live-translate-preview`
@@ -81,6 +81,22 @@ dart run tool/live_smoke.dart
 ```
 
 The command passes only when it receives a source transcript, translated transcript, and translated PCM audio. Do not put the key in a committed shell file or `.env` file.
+
+For long-session verification, keep the same secret-handling rules and use the
+bounded media harness. For 1,260 seconds (21 minutes) it sends 100 ms silent PCM
+chunks at production pace, then sends the speech fixture and requires all three
+output forms:
+
+```bash
+GEMINI_API_KEY='your-key' \
+LIVE_TEST_PCM='/absolute/path/to/input.pcm' \
+LIVE_TEST_IDLE_SECONDS=1260 \
+dart run tool/live_long_session_smoke.dart
+```
+
+Progress and the final report contain only audio-chunk totals, readiness,
+reconnect/failure counts, payload sizes, and Token counters. They never print the
+key, audio, or transcript content.
 
 ## Remaining Android hardening gate
 

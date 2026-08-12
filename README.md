@@ -2,7 +2,7 @@
 
 Android-first, cross-platform, ultra-low-latency, two-way speech translation for face-to-face travel conversations, powered by the Google Gemini Live API and `gemini-3.5-live-translate-preview`.
 
-> Status: Android-first `0.10.0` preview. The app, bounded native Android audio path, real Gemini speech/text/audio pipeline, listener-facing face-to-face translation, interruption-safe speaker switching, translated-audio replay, persisted language-pair preferences, typed offline/quota/permission recovery states, system-audio interruption handling, and privacy-safe runtime diagnostics are runnable; physical-device acoustic and latency hardening remains before a production release.
+> Status: Android-first `0.11.0` preview. The app, bounded native Android audio path, real Gemini speech/text/audio pipeline, listener-facing face-to-face translation, interruption-safe speaker switching, translated-audio replay, persisted language-pair preferences, typed offline/quota/permission recovery states, long-session context compression, system-audio interruption handling, and privacy-safe runtime diagnostics are runnable; physical-device acoustic and latency hardening remains before a production release.
 
 ## Product direction
 
@@ -70,7 +70,7 @@ Flutter is the accepted application framework. Android is the first implementati
 
 See the [Google Live Translation guide](https://ai.google.dev/gemini-api/docs/live-api/live-translate) for the current API contract.
 
-## Implemented through 0.10.0
+## Implemented through 0.11.0
 
 - Direct BYOK WebSocket connection to `gemini-3.5-live-translate-preview` with no application backend.
 - Source transcript, translated transcript, and translated 24 kHz PCM audio output.
@@ -89,7 +89,8 @@ See the [Google Live Translation guide](https://ai.google.dev/gemini-api/docs/li
   playback capped at 1.5 seconds of queued audio.
 - Memory-only key use by default and opt-in OS-backed secure storage.
 - Setup timeout, bounded reconnect, terminal/retryable error classification,
-  session resumption, `goAway`, and redacted user errors.
+  session resumption, `goAway`, sliding-window context compression, and redacted
+  user errors.
 - Material status and recovery actions distinguish listening, translating,
   reconnecting, offline, rate-limited, permission-denied, and failed states;
   connecting/reconnecting can always be cancelled explicitly.
@@ -103,7 +104,9 @@ See the [Google Live Translation guide](https://ai.google.dev/gemini-api/docs/li
   the latest 200 conversation turns retained in memory.
 - Redacted in-app diagnostics for first-output latency, capture/echo suppression,
   reconnect/failure counts, direction switches, completed turns, and native
-  playback queue depth/drops. Reports contain no key, audio, or transcript text.
+  playback queue depth/drops. Gemini prompt, response, and total Token counters
+  are aggregated across both directions without retaining payloads. Reports
+  contain no key, audio, or transcript text.
 - Terminal session/audio failures automatically release capture, both warm
   sessions, and playback before the user can retry.
 - Android uses one app-level audio-focus owner. Calls or other focus owners stop
@@ -126,9 +129,18 @@ Enter your own Google AI Studio key in the app. The key's project must be able t
 ## Validation status
 
 - `flutter analyze`: clean.
-- 57 automated protocol, preference, permission, session, PCM, transcript, controller, diagnostics, and
+- 61 automated protocol, preference, permission, session, PCM, transcript, controller, diagnostics, and
   responsive widget tests: passing.
-- Real API smoke: 16 kHz speech input produced source text, translated text, and 24 kHz audio.
+- Real API smoke: both Chinese-to-English and English-to-Chinese 16 kHz speech
+  inputs produced source text, translated text, and 24 kHz audio. The server also
+  accepted context compression and returned non-zero usage metadata.
+- A deterministic logical 20-minute media run processed 12,000 microphone chunks,
+  240 completed turns, and 11.52 MB of translated PCM while preserving the
+  200-turn history and bounded replay/cache policies.
+- A real 21-minute production-paced Live API run sent 12,212 PCM chunks, crossed
+  two server connection rotations with session resumption and zero failures, then
+  still produced source text, translated text, and translated audio. Host-harness
+  RSS grew by less than 5 MiB from minute 1 to minute 18.
 - Android API 36 emulator: install, cold start, Key validation, microphone
   permission, start/stop, live session readiness, ten rapid A/B switches during
   translated-audio output, language search, mute, and both layouts exercised
