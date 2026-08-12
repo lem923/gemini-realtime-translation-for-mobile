@@ -194,7 +194,12 @@ void main() {
 
     enqueueGate.complete();
     await stopping;
-    expect(playback.operations, <String>['configure', 'enqueue', 'flush']);
+    expect(playback.operations, <String>[
+      'configure',
+      'enqueue',
+      'flush',
+      'dispose',
+    ]);
     controller.dispose();
   });
 
@@ -338,6 +343,45 @@ void main() {
       expect(controller.errorMessage, contains('文字翻译'));
       await controller.stopConversation(preserveError: true);
       expect(playback.operations, contains('flush'));
+      controller.dispose();
+    },
+  );
+
+  test(
+    'system audio interruption releases capture and live sessions',
+    () async {
+      final _FakeAudioCapture capture = _FakeAudioCapture();
+      final _FakePlayback playback = _FakePlayback();
+      final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
+      final ConversationController controller = ConversationController(
+        keyStore: _MemoryKeyStore('stored-key'),
+        audioCapture: capture,
+        playback: playback,
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) {
+              final _FakeLiveSession session = _FakeLiveSession();
+              sessions.add(session);
+              return session;
+            },
+      );
+
+      await controller.initialize();
+      await controller.startConversation();
+      playback
+        ..emitInterruption()
+        ..emitInterruption();
+      await _flushEvents();
+      await _flushEvents();
+
+      expect(controller.phase, ConversationPhase.failed);
+      expect(controller.errorMessage, contains('系统中断'));
+      expect(capture.stopped, isTrue);
+      expect(sessions.every((session) => session.closed), isTrue);
+      expect(playback.operations, contains('flush'));
+      final ConversationDiagnostics diagnostics = await controller
+          .collectDiagnostics();
+      expect(diagnostics.audioInterruptions, 1);
+
       controller.dispose();
     },
   );
@@ -674,6 +718,8 @@ void main() {
         queuedBytes: 2400,
         maxQueuedBytes: 72000,
         droppedChunks: 2,
+        outputRoute: AudioOutputRoute.speaker,
+        audioFocusGranted: true,
       ),
     );
     final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
@@ -734,6 +780,8 @@ void main() {
     expect(diagnostics.playbackMetrics.queuedMilliseconds, 50);
     expect(diagnostics.playbackMetrics.maximumQueueMilliseconds, 1500);
     expect(diagnostics.playbackMetrics.droppedChunks, 2);
+    expect(diagnostics.playbackMetrics.outputRoute, AudioOutputRoute.speaker);
+    expect(diagnostics.playbackMetrics.audioFocusGranted, isTrue);
     expect(diagnostics.playbackMetricsAvailable, isTrue);
 
     final String report = diagnostics.toRedactedText();
@@ -819,14 +867,25 @@ class _FakePlayback implements PcmPlaybackGateway {
   bool failNextEnqueue;
   bool failNextFlush;
   final PcmPlaybackMetrics playbackMetrics;
+  final StreamController<PcmPlaybackEvent> _events =
+      StreamController<PcmPlaybackEvent>.broadcast(sync: true);
   final List<List<int>> enqueued = <List<int>>[];
   final List<String> operations = <String>[];
+  int disposeCount = 0;
+
+  void emitInterruption() => _events.add(const PcmPlaybackInterrupted());
+
+  @override
+  Stream<PcmPlaybackEvent> get events => _events.stream;
 
   @override
   Future<void> configure() async => operations.add('configure');
 
   @override
-  Future<void> dispose() async {}
+  Future<void> dispose() async {
+    disposeCount += 1;
+    operations.add('dispose');
+  }
 
   @override
   Future<void> enqueue(Uint8List pcm) async {

@@ -17,6 +17,7 @@ class ConversationDiagnostics {
     required this.reconnectEvents,
     required this.sessionFailures,
     required this.playbackFailures,
+    required this.audioInterruptions,
     required this.listeningReadyMilliseconds,
     required this.firstMicrophoneSentMilliseconds,
     required this.firstSourceTextMilliseconds,
@@ -38,6 +39,7 @@ class ConversationDiagnostics {
   final int reconnectEvents;
   final int sessionFailures;
   final int playbackFailures;
+  final int audioInterruptions;
   final int? listeningReadyMilliseconds;
   final int? firstMicrophoneSentMilliseconds;
   final int? firstSourceTextMilliseconds;
@@ -61,6 +63,7 @@ class ConversationDiagnostics {
       '重连事件: $reconnectEvents',
       '会话错误: $sessionFailures',
       '播放错误: $playbackFailures',
+      '系统音频中断: $audioInterruptions',
       '连接并开始聆听: ${latency(listeningReadyMilliseconds)}',
       '首个麦克风发送块: ${latency(firstMicrophoneSentMilliseconds)}',
       '首段原文（相对首个发送块）: '
@@ -74,6 +77,8 @@ class ConversationDiagnostics {
           '${playbackMetrics.queuedMilliseconds} / '
           '${playbackMetrics.maximumQueueMilliseconds} ms',
       '原生丢弃译音块: ${playbackMetrics.droppedChunks}',
+      '当前输出路由: ${playbackMetrics.outputRoute.name}',
+      '音频焦点已获得: ${playbackMetrics.audioFocusGranted ? '是' : '否'}',
       '原生指标可用: ${playbackMetricsAvailable ? '是' : '否'}',
     ].join('\n');
   }

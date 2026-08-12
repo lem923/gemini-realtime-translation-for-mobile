@@ -40,6 +40,10 @@ class RecordAudioCaptureGateway implements AudioCaptureGateway {
         echoCancel: true,
         noiseSuppress: true,
         streamBufferSize: inputChunkBytes,
+        // The native playback adapter owns the single app-level audio-focus
+        // request and forwards interruptions to the conversation controller.
+        // A second request from `record` would evict our own focus owner.
+        audioInterruption: AudioInterruptionMode.none,
       ),
     );
     _rawSubscription = raw.listen(

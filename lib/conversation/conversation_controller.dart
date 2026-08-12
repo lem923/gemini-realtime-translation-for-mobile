@@ -53,6 +53,7 @@ class ConversationController extends ChangeNotifier {
       };
 
   StreamSubscription<Uint8List>? _captureSubscription;
+  StreamSubscription<PcmPlaybackEvent>? _playbackEventSubscription;
   Future<void> _playbackChain = Future<void>.value();
   Future<void>? _stopOperation;
   String _apiKey = '';
@@ -82,6 +83,7 @@ class ConversationController extends ChangeNotifier {
   int _reconnectEvents = 0;
   int _sessionFailures = 0;
   int _playbackFailures = 0;
+  int _audioInterruptions = 0;
   int _maximumScheduledPlaybackMicros = 0;
   String? _errorMessage;
   ConversationPhase _phase = ConversationPhase.needsKey;
@@ -118,6 +120,10 @@ class ConversationController extends ChangeNotifier {
       List<ConversationTurn>.unmodifiable(_turns);
 
   Future<void> initialize() async {
+    _playbackEventSubscription ??= _playback.events.listen(
+      _handlePlaybackEvent,
+      onError: (Object _) {},
+    );
     final String? stored = await _keyStore.read();
     if (_disposed) {
       return;
@@ -422,6 +428,19 @@ class ConversationController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void _handlePlaybackEvent(PcmPlaybackEvent event) {
+    if (_disposed ||
+        event is! PcmPlaybackInterrupted ||
+        _phase == ConversationPhase.failed) {
+      return;
+    }
+    if (_captureSubscription == null && !isBusy && !isListening) {
+      return;
+    }
+    _audioInterruptions += 1;
+    _terminateConversation('音频被系统中断，翻译已停止');
+  }
+
   void _commitTurn(SpeakerSide side) {
     final TranscriptAccumulator source = _sourceTranscripts[side]!;
     final TranscriptAccumulator translated = _translatedTranscripts[side]!;
@@ -595,6 +614,7 @@ class ConversationController extends ChangeNotifier {
     }
     _sessions.clear();
     await _flushPlayback();
+    await _releasePlayback();
     if (!preserveError) {
       _errorMessage = null;
     } else if (finalError != null) {
@@ -625,6 +645,14 @@ class ConversationController extends ChangeNotifier {
         finalError: message,
       ),
     );
+  }
+
+  Future<void> _releasePlayback() async {
+    try {
+      await _playback.dispose();
+    } catch (_) {
+      _handlePlaybackFailure();
+    }
   }
 
   static SpeakerSide _otherSide(SpeakerSide side) =>
@@ -667,6 +695,7 @@ class ConversationController extends ChangeNotifier {
       reconnectEvents: _reconnectEvents,
       sessionFailures: _sessionFailures,
       playbackFailures: _playbackFailures,
+      audioInterruptions: _audioInterruptions,
       listeningReadyMilliseconds: _listeningReadyMilliseconds,
       firstMicrophoneSentMilliseconds: _firstMicrophoneSentMilliseconds,
       firstSourceTextMilliseconds: _firstSourceTextMilliseconds,
@@ -698,6 +727,7 @@ class ConversationController extends ChangeNotifier {
     _reconnectEvents = 0;
     _sessionFailures = 0;
     _playbackFailures = 0;
+    _audioInterruptions = 0;
     _maximumScheduledPlaybackMicros = 0;
   }
 
@@ -731,6 +761,8 @@ class ConversationController extends ChangeNotifier {
 
   Future<void> _disposeResources() async {
     await _stopOperation;
+    await _playbackEventSubscription?.cancel();
+    _playbackEventSubscription = null;
     await _captureSubscription?.cancel();
     await _audioCapture.dispose();
     for (final StreamSubscription<LiveEvent> subscription
@@ -741,6 +773,6 @@ class ConversationController extends ChangeNotifier {
       await session.close();
     }
     await _flushPlayback();
-    await _playback.dispose();
+    await _releasePlayback();
   }
 }

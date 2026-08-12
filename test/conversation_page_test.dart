@@ -140,6 +140,9 @@ class _NoopAudioCapture implements AudioCaptureGateway {
 
 class _NoopPlayback implements PcmPlaybackGateway {
   @override
+  Stream<PcmPlaybackEvent> get events => const Stream<PcmPlaybackEvent>.empty();
+
+  @override
   Future<void> configure() async {}
 
   @override
