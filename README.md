@@ -2,7 +2,7 @@
 
 Android-first, cross-platform, ultra-low-latency, two-way speech translation for face-to-face travel conversations, powered by the Google Gemini Live API and `gemini-3.5-live-translate-preview`.
 
-> Status: Android-first `0.5.0` preview. The app, bounded native Android audio path, real Gemini speech/text/audio pipeline, interruption-safe speaker switching, system-audio interruption handling, and privacy-safe runtime diagnostics are runnable; physical-device acoustic and latency hardening remains before a production release.
+> Status: Android-first `0.6.0` preview. The app, bounded native Android audio path, real Gemini speech/text/audio pipeline, interruption-safe speaker switching, translated-audio replay, system-audio interruption handling, and privacy-safe runtime diagnostics are runnable; physical-device acoustic and latency hardening remains before a production release.
 
 ## Product direction
 
@@ -69,7 +69,7 @@ Flutter is the accepted application framework. Android is the first implementati
 
 See the [Google Live Translation guide](https://ai.google.dev/gemini-api/docs/live-api/live-translate) for the current API contract.
 
-## Implemented through 0.5.0
+## Implemented through 0.6.0
 
 - Direct BYOK WebSocket connection to `gemini-3.5-live-translate-preview` with no application backend.
 - Source transcript, translated transcript, and translated 24 kHz PCM audio output.
@@ -79,6 +79,9 @@ See the [Google Live Translation guide](https://ai.google.dev/gemini-api/docs/li
   ready, so users can actively interrupt a long translation.
 - More than 70 searchable target languages using the official BCP-47 list.
 - Standard conversation and face-to-face reading layouts, mute, history, and interruption-safe stop behavior.
+- Per-turn translated-audio replay from a memory-only bounded cache: 30 seconds
+  maximum per turn, 8 MiB total, oldest-audio eviction without deleting text,
+  and immediate cancellation on mute, clear, speaker switch, stop, or fresh live output.
 - Android 16 kHz microphone capture plus serialized native `AudioTrack`
   playback capped at 1.5 seconds of queued audio.
 - Memory-only key use by default and opt-in OS-backed secure storage.
@@ -111,7 +114,7 @@ Enter your own Google AI Studio key in the app. The key's project must be able t
 ## Validation status
 
 - `flutter analyze`: clean.
-- 36 automated protocol, session, PCM, transcript, controller, diagnostics, and
+- 42 automated protocol, session, PCM, transcript, controller, diagnostics, and
   responsive widget tests: passing.
 - Real API smoke: 16 kHz speech input produced source text, translated text, and 24 kHz audio.
 - Android API 36 emulator: install, cold start, Key validation, microphone

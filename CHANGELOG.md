@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-13
+
+### Added
+
+- Added a Material 3 replay control to every completed turn that has translated
+  speech, including an explicit stop state.
+- Added memory-only replay retention capped at 30 seconds per turn and 8 MiB
+  total; oldest audio is evicted without removing transcript history.
+- Added controller and widget coverage for complete replay, immediate cancel,
+  microphone suppression, fresh-live-output priority, oversized turns, cache
+  eviction, and the Material replay state.
+
+### Changed
+
+- Replay feeds the native player in paced 100 ms chunks and releases idle audio
+  resources on completion.
+- Mute, history clear, speaker switch, conversation stop, system interruption,
+  and newly arriving translated speech cancel old replay immediately.
+
 ## [0.5.0] - 2026-08-13
 
 ### Added

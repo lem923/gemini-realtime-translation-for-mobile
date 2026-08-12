@@ -27,7 +27,7 @@ Exit gate: reliable one-direction translation on the defined physical Android de
 - Let the user explicitly select person A or person B as the active speaker.
 - Maintain two ready translation directions where measurements justify it, activating only the selected direction.
 - Add tap-to-talk or start/stop capture; automatic speaker detection remains out of scope.
-- Add transcript history, replay, mute, and clear controls.
+- Maintain transcript history plus bounded memory-only replay, mute, and clear controls.
 - Handle interruption, direction change, permission denial, offline state, quota errors, and model disconnects.
 
 Exit gate: two people can complete representative hotel, restaurant, taxi, shopping, and emergency dialogues on one phone.
