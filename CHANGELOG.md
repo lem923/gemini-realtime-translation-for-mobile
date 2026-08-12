@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-08-13
+
+### Changed
+
+- Replaced the ambiguous boolean microphone status with a typed
+  `notDetermined`, `granted`, and `denied` platform contract prepared for iOS.
+- Android now records only whether a permission request was answered or had
+  previously been granted, using private non-sensitive application preferences.
+
+### Fixed
+
+- A remembered-key cold start before the first microphone request no longer
+  displays a false denial or sends the user directly to system settings.
+- A real denial and a later runtime revocation remain distinguishable and
+  recoverable after Android process death.
+
+### Tests
+
+- Added wire-decoding, method-channel acknowledgement, first-request, denial,
+  and revocation state coverage, bringing the automated suite to 55 tests.
+
 ## [0.8.0] - 2026-08-13
 
 ### Added

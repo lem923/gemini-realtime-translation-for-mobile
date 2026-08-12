@@ -2,7 +2,7 @@
 
 Android-first, cross-platform, ultra-low-latency, two-way speech translation for face-to-face travel conversations, powered by the Google Gemini Live API and `gemini-3.5-live-translate-preview`.
 
-> Status: Android-first `0.8.0` preview. The app, bounded native Android audio path, real Gemini speech/text/audio pipeline, interruption-safe speaker switching, translated-audio replay, persisted language-pair preferences, typed offline/quota/permission recovery states, system-audio interruption handling, and privacy-safe runtime diagnostics are runnable; physical-device acoustic and latency hardening remains before a production release.
+> Status: Android-first `0.9.0` preview. The app, bounded native Android audio path, real Gemini speech/text/audio pipeline, interruption-safe speaker switching, translated-audio replay, persisted language-pair preferences, typed offline/quota/permission recovery states, system-audio interruption handling, and privacy-safe runtime diagnostics are runnable; physical-device acoustic and latency hardening remains before a production release.
 
 ## Product direction
 
@@ -70,7 +70,7 @@ Flutter is the accepted application framework. Android is the first implementati
 
 See the [Google Live Translation guide](https://ai.google.dev/gemini-api/docs/live-api/live-translate) for the current API contract.
 
-## Implemented through 0.8.0
+## Implemented through 0.9.0
 
 - Direct BYOK WebSocket connection to `gemini-3.5-live-translate-preview` with no application backend.
 - Source transcript, translated transcript, and translated 24 kHz PCM audio output.
@@ -93,9 +93,10 @@ See the [Google Live Translation guide](https://ai.google.dev/gemini-api/docs/li
 - Material status and recovery actions distinguish listening, translating,
   reconnecting, offline, rate-limited, permission-denied, and failed states;
   connecting/reconnecting can always be cancelled explicitly.
-- Microphone status is observed without prompting at startup. Runtime
-  revocation stops all media resources; the denied state opens the native app
-  settings page and restores readiness after the user grants access and returns.
+- Microphone status is observed without prompting and distinguishes a first
+  request from a real denial across cold starts. Runtime revocation stops all
+  media resources; the denied state opens the native app settings page and
+  restores readiness after the user grants access and returns.
 - Dynamic status/error announcements, explicit face-to-face speaker semantics,
   and at least 48 px language/settings targets improve screen-reader and touch use.
 - Lifecycle cancellation, stale-direction protection, bounded transcripts, and
@@ -125,7 +126,7 @@ Enter your own Google AI Studio key in the app. The key's project must be able t
 ## Validation status
 
 - `flutter analyze`: clean.
-- 52 automated protocol, preference, permission, session, PCM, transcript, controller, diagnostics, and
+- 55 automated protocol, preference, permission, session, PCM, transcript, controller, diagnostics, and
   responsive widget tests: passing.
 - Real API smoke: 16 kHz speech input produced source text, translated text, and 24 kHz audio.
 - Android API 36 emulator: install, cold start, Key validation, microphone
@@ -140,6 +141,9 @@ Enter your own Google AI Studio key in the app. The key's project must be able t
   initial grant flow; runtime revocation triggered Android's process kill, cold
   restart entered a recoverable denied state, app-details settings opened, and
   grant-plus-return restored readiness without re-entering the key.
+- Android API 36 first-request distinction: saving a key and restarting before
+  any microphone prompt remained ready, start opened the native prompt, denial
+  persisted as denied, and active revoke plus process death remained recoverable.
 - Android API 36 audio-focus integration: active focus and speaker route
   observed; manual stop released focus/recording; clean restart succeeded; an
   external foreground service then took focus and the app stopped capture and
