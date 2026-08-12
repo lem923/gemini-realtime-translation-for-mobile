@@ -67,6 +67,9 @@ class ConversationController extends ChangeNotifier {
   int _turnId = 0;
   int? _diagnosticStartedMicros;
   int? _diagnosticStoppedMicros;
+  int? _firstMicrophoneSentMicros;
+  int? _listeningReadyMilliseconds;
+  int? _firstMicrophoneSentMilliseconds;
   int? _firstSourceTextMilliseconds;
   int? _firstTranslatedTextMilliseconds;
   int? _firstTranslatedAudioMilliseconds;
@@ -242,6 +245,7 @@ class ConversationController extends ChangeNotifier {
         cancelOnError: false,
       );
       _phase = ConversationPhase.listening;
+      _listeningReadyMilliseconds ??= _elapsedDiagnosticMilliseconds();
       notifyListeners();
       final SpeakerSide standby = _otherSide(_activeSpeaker);
       unawaited(_ensureSession(standby).catchError((Object _) {}));
@@ -285,6 +289,11 @@ class ConversationController extends ChangeNotifier {
     }
     final LiveTranslationSession? session = _sessions[_activeSpeaker];
     if (session?.isReady == true) {
+      final int now = _monotonicMicros();
+      _firstMicrophoneSentMicros ??= now;
+      _firstMicrophoneSentMilliseconds ??= _elapsedDiagnosticMillisecondsAt(
+        now,
+      );
       _microphoneChunksSent += 1;
       session!.sendAudio(chunk);
     }
@@ -297,7 +306,7 @@ class ConversationController extends ChangeNotifier {
     switch (event) {
       case LiveInputTranscript(:final String text):
         if (side == _activeSpeaker) {
-          _firstSourceTextMilliseconds ??= _elapsedDiagnosticMilliseconds();
+          _firstSourceTextMilliseconds ??= _elapsedFromFirstSendMilliseconds();
         }
         _sourceTranscripts[side]!.add(text);
         if (side == _activeSpeaker) {
@@ -305,7 +314,8 @@ class ConversationController extends ChangeNotifier {
         }
       case LiveOutputTranscript(:final String text):
         if (side == _activeSpeaker) {
-          _firstTranslatedTextMilliseconds ??= _elapsedDiagnosticMilliseconds();
+          _firstTranslatedTextMilliseconds ??=
+              _elapsedFromFirstSendMilliseconds();
         }
         _translatedTranscripts[side]!.add(text);
         if (side == _activeSpeaker) {
@@ -314,7 +324,7 @@ class ConversationController extends ChangeNotifier {
       case LiveAudioChunk(:final Uint8List bytes):
         if (side == _activeSpeaker) {
           _firstTranslatedAudioMilliseconds ??=
-              _elapsedDiagnosticMilliseconds();
+              _elapsedFromFirstSendMilliseconds();
           _outputAudioChunks += 1;
           _outputAudioBytes += bytes.length;
           if (!_audioMuted) {
@@ -648,6 +658,8 @@ class ConversationController extends ChangeNotifier {
       reconnectEvents: _reconnectEvents,
       sessionFailures: _sessionFailures,
       playbackFailures: _playbackFailures,
+      listeningReadyMilliseconds: _listeningReadyMilliseconds,
+      firstMicrophoneSentMilliseconds: _firstMicrophoneSentMilliseconds,
       firstSourceTextMilliseconds: _firstSourceTextMilliseconds,
       firstTranslatedTextMilliseconds: _firstTranslatedTextMilliseconds,
       firstTranslatedAudioMilliseconds: _firstTranslatedAudioMilliseconds,
@@ -662,6 +674,9 @@ class ConversationController extends ChangeNotifier {
   void _resetDiagnostics(int startedMicros) {
     _diagnosticStartedMicros = startedMicros;
     _diagnosticStoppedMicros = null;
+    _firstMicrophoneSentMicros = null;
+    _listeningReadyMilliseconds = null;
+    _firstMicrophoneSentMilliseconds = null;
     _firstSourceTextMilliseconds = null;
     _firstTranslatedTextMilliseconds = null;
     _firstTranslatedAudioMilliseconds = null;
@@ -678,12 +693,23 @@ class ConversationController extends ChangeNotifier {
   }
 
   int _elapsedDiagnosticMilliseconds() {
+    return _elapsedDiagnosticMillisecondsAt(_monotonicMicros());
+  }
+
+  int _elapsedDiagnosticMillisecondsAt(int nowMicros) {
     final int? startedMicros = _diagnosticStartedMicros;
     if (startedMicros == null) {
       return 0;
     }
-    return math.max(0, _monotonicMicros() - startedMicros) ~/
+    return math.max(0, nowMicros - startedMicros) ~/
         Duration.microsecondsPerMillisecond;
+  }
+
+  int _elapsedFromFirstSendMilliseconds() {
+    final int now = _monotonicMicros();
+    final int baseline =
+        _firstMicrophoneSentMicros ?? _diagnosticStartedMicros ?? now;
+    return math.max(0, now - baseline) ~/ Duration.microsecondsPerMillisecond;
   }
 
   @override

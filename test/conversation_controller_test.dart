@@ -607,6 +607,8 @@ void main() {
     expect(diagnostics.directionSwitches, 1);
     expect(diagnostics.reconnectEvents, 1);
     expect(diagnostics.sessionFailures, 1);
+    expect(diagnostics.listeningReadyMilliseconds, 0);
+    expect(diagnostics.firstMicrophoneSentMilliseconds, 0);
     expect(diagnostics.firstSourceTextMilliseconds, 50);
     expect(diagnostics.firstTranslatedTextMilliseconds, 70);
     expect(diagnostics.firstTranslatedAudioMilliseconds, 80);

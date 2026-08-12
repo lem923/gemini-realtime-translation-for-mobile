@@ -17,6 +17,8 @@ class ConversationDiagnostics {
     required this.reconnectEvents,
     required this.sessionFailures,
     required this.playbackFailures,
+    required this.listeningReadyMilliseconds,
+    required this.firstMicrophoneSentMilliseconds,
     required this.firstSourceTextMilliseconds,
     required this.firstTranslatedTextMilliseconds,
     required this.firstTranslatedAudioMilliseconds,
@@ -36,6 +38,8 @@ class ConversationDiagnostics {
   final int reconnectEvents;
   final int sessionFailures;
   final int playbackFailures;
+  final int? listeningReadyMilliseconds;
+  final int? firstMicrophoneSentMilliseconds;
   final int? firstSourceTextMilliseconds;
   final int? firstTranslatedTextMilliseconds;
   final int? firstTranslatedAudioMilliseconds;
@@ -57,9 +61,14 @@ class ConversationDiagnostics {
       '重连事件: $reconnectEvents',
       '会话错误: $sessionFailures',
       '播放错误: $playbackFailures',
-      '首段原文: ${latency(firstSourceTextMilliseconds)}',
-      '首段译文: ${latency(firstTranslatedTextMilliseconds)}',
-      '首段译音: ${latency(firstTranslatedAudioMilliseconds)}',
+      '连接并开始聆听: ${latency(listeningReadyMilliseconds)}',
+      '首个麦克风发送块: ${latency(firstMicrophoneSentMilliseconds)}',
+      '首段原文（相对首个发送块）: '
+          '${latency(firstSourceTextMilliseconds)}',
+      '首段译文（相对首个发送块）: '
+          '${latency(firstTranslatedTextMilliseconds)}',
+      '首段译音（相对首个发送块）: '
+          '${latency(firstTranslatedAudioMilliseconds)}',
       '最大 Dart 排队: $maximumScheduledPlaybackMilliseconds ms',
       '原生当前 / 上限排队: '
           '${playbackMetrics.queuedMilliseconds} / '
