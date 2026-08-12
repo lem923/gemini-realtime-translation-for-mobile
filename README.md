@@ -2,7 +2,7 @@
 
 Android-first, cross-platform, ultra-low-latency, two-way speech translation for face-to-face travel conversations, powered by the Google Gemini Live API and `gemini-3.5-live-translate-preview`.
 
-> Status: Android-first `0.9.0` preview. The app, bounded native Android audio path, real Gemini speech/text/audio pipeline, interruption-safe speaker switching, translated-audio replay, persisted language-pair preferences, typed offline/quota/permission recovery states, system-audio interruption handling, and privacy-safe runtime diagnostics are runnable; physical-device acoustic and latency hardening remains before a production release.
+> Status: Android-first `0.10.0` preview. The app, bounded native Android audio path, real Gemini speech/text/audio pipeline, listener-facing face-to-face translation, interruption-safe speaker switching, translated-audio replay, persisted language-pair preferences, typed offline/quota/permission recovery states, system-audio interruption handling, and privacy-safe runtime diagnostics are runnable; physical-device acoustic and latency hardening remains before a production release.
 
 ## Product direction
 
@@ -70,7 +70,7 @@ Flutter is the accepted application framework. Android is the first implementati
 
 See the [Google Live Translation guide](https://ai.google.dev/gemini-api/docs/live-api/live-translate) for the current API contract.
 
-## Implemented through 0.9.0
+## Implemented through 0.10.0
 
 - Direct BYOK WebSocket connection to `gemini-3.5-live-translate-preview` with no application backend.
 - Source transcript, translated transcript, and translated 24 kHz PCM audio output.
@@ -81,7 +81,7 @@ See the [Google Live Translation guide](https://ai.google.dev/gemini-api/docs/li
 - More than 70 searchable target languages using the official BCP-47 list.
 - The last valid A/B language pair is restored across restarts and upgrades from
   one non-sensitive local preference; conversation text and audio remain memory-only.
-- Standard conversation and face-to-face reading layouts, mute, history, and interruption-safe stop behavior.
+- Standard conversation and face-to-face reading layouts, mute, history, and interruption-safe stop behavior. In face-to-face mode, the selected speaker sees the live source transcript while the opposite listener sees the translated transcript; the completed pair stays visible until the next utterance or direction change.
 - Per-turn translated-audio replay from a memory-only bounded cache: 30 seconds
   maximum per turn, 8 MiB total, oldest-audio eviction without deleting text,
   and immediate cancellation on mute, clear, speaker switch, stop, or fresh live output.
@@ -126,7 +126,7 @@ Enter your own Google AI Studio key in the app. The key's project must be able t
 ## Validation status
 
 - `flutter analyze`: clean.
-- 55 automated protocol, preference, permission, session, PCM, transcript, controller, diagnostics, and
+- 57 automated protocol, preference, permission, session, PCM, transcript, controller, diagnostics, and
   responsive widget tests: passing.
 - Real API smoke: 16 kHz speech input produced source text, translated text, and 24 kHz audio.
 - Android API 36 emulator: install, cold start, Key validation, microphone
@@ -144,6 +144,9 @@ Enter your own Google AI Studio key in the app. The key's project must be able t
 - Android API 36 first-request distinction: saving a key and restarting before
   any microphone prompt remained ready, start opened the native prompt, denial
   persisted as denied, and active revoke plus process death remained recoverable.
+- Android API 36 face-to-face interaction: both full-width halves expose real
+  accessibility click actions, manual A/B taps switch the selected speaker, and
+  the opposite half changes to the listener-facing translation role.
 - Android API 36 audio-focus integration: active focus and speaker route
   observed; manual stop released focus/recording; clean restart succeeded; an
   external foreground service then took focus and the app stopped capture and

@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-08-13
+
+### Changed
+
+- Face-to-face mode now places the live source transcript on the selected
+  speaker's half and the translated transcript on the opposite listener's half.
+- Completed source and translated text remain visible until a new utterance or
+  direction starts, without leaking a completed turn across language changes.
+- Both rotated and upright halves fill the same width and explicitly identify
+  their current `讲话` or `译文` role.
+
+### Fixed
+
+- Restored a real accessibility tap action for both face-to-face halves; Android
+  now exposes each half as a clickable button with the correct selected state.
+- Long transcripts remain bounded on compact phone layouts.
+
+### Tests
+
+- Added A-to-B, B-to-A, completed-turn retention, stale-text replacement,
+  long-text, equal-width, live-region, selected-state, and tap-action coverage,
+  bringing the automated suite to 57 tests.
+
 ## [0.9.0] - 2026-08-13
 
 ### Changed
