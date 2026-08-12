@@ -82,7 +82,9 @@ void main() {
   testWidgets('offers a recoverable and accessible denied-permission action', (
     WidgetTester tester,
   ) async {
-    final _NoopPermissionGateway permissions = _NoopPermissionGateway(false);
+    final _NoopPermissionGateway permissions = _NoopPermissionGateway(
+      MicrophonePermissionStatus.denied,
+    );
     final ConversationController controller = ConversationController(
       keyStore: _StoredKeyStore(),
       audioCapture: _NoopAudioCapture(),
@@ -285,19 +287,23 @@ class _NoopAudioCapture implements AudioCaptureGateway {
 class _NoopPermissionGateway implements MicrophonePermissionGateway {
   _NoopPermissionGateway(this.status);
 
-  bool? status;
+  MicrophonePermissionStatus? status;
   int openSettingsCount = 0;
 
   @override
-  Stream<bool> get changes => const Stream<bool>.empty();
+  Stream<MicrophonePermissionStatus> get changes =>
+      const Stream<MicrophonePermissionStatus>.empty();
 
   @override
-  Future<bool?> currentStatus() async => status;
+  Future<MicrophonePermissionStatus?> currentStatus() async => status;
 
   @override
   Future<void> openAppSettings() async {
     openSettingsCount += 1;
   }
+
+  @override
+  Future<void> recordRequestResult({required bool granted}) async {}
 }
 
 class _NoopPlayback implements PcmPlaybackGateway {

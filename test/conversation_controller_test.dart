@@ -126,7 +126,7 @@ void main() {
     () async {
       final _FakeAudioCapture capture = _FakeAudioCapture();
       final _FakeMicrophonePermissionGateway permissions =
-          _FakeMicrophonePermissionGateway(false);
+          _FakeMicrophonePermissionGateway(MicrophonePermissionStatus.denied);
       final ConversationController controller = ConversationController(
         keyStore: _MemoryKeyStore('stored-key'),
         audioCapture: capture,
@@ -141,12 +141,12 @@ void main() {
       expect(controller.phase, ConversationPhase.permissionDenied);
       expect(capture.started, isFalse);
 
-      permissions.emit(true);
+      permissions.emit(MicrophonePermissionStatus.granted);
       expect(controller.phase, ConversationPhase.idle);
       await controller.startConversation();
       expect(controller.phase, ConversationPhase.listening);
 
-      permissions.emit(false);
+      permissions.emit(MicrophonePermissionStatus.denied);
       await _flushEvents();
       expect(controller.phase, ConversationPhase.permissionDenied);
       expect(controller.errorMessage, contains('已被撤销'));
@@ -154,6 +154,37 @@ void main() {
 
       await controller.openMicrophoneSettings();
       expect(permissions.openSettingsCount, 1);
+      controller.dispose();
+    },
+  );
+
+  test(
+    'does not treat an unrequested microphone permission as denied',
+    () async {
+      final _FakeAudioCapture capture = _FakeAudioCapture(permission: false);
+      final _FakeMicrophonePermissionGateway permissions =
+          _FakeMicrophonePermissionGateway(
+            MicrophonePermissionStatus.notDetermined,
+          );
+      final ConversationController controller = ConversationController(
+        keyStore: _MemoryKeyStore('stored-key'),
+        audioCapture: capture,
+        playback: _FakePlayback(),
+        permissionGateway: permissions,
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) =>
+                _FakeLiveSession(),
+      );
+
+      await controller.initialize();
+      expect(controller.phase, ConversationPhase.idle);
+      permissions.emit(MicrophonePermissionStatus.notDetermined);
+      expect(controller.phase, ConversationPhase.idle);
+
+      await controller.startConversation();
+      expect(controller.phase, ConversationPhase.permissionDenied);
+      expect(capture.started, isFalse);
+      expect(permissions.requestResults, <bool>[false]);
       controller.dispose();
     },
   );
@@ -1297,26 +1328,31 @@ class _FakeAudioCapture implements AudioCaptureGateway {
 class _FakeMicrophonePermissionGateway implements MicrophonePermissionGateway {
   _FakeMicrophonePermissionGateway(this.status);
 
-  bool? status;
+  MicrophonePermissionStatus? status;
   int openSettingsCount = 0;
-  final StreamController<bool> _changes = StreamController<bool>.broadcast(
-    sync: true,
-  );
+  final List<bool> requestResults = <bool>[];
+  final StreamController<MicrophonePermissionStatus> _changes =
+      StreamController<MicrophonePermissionStatus>.broadcast(sync: true);
 
-  void emit(bool granted) {
-    status = granted;
-    _changes.add(granted);
+  void emit(MicrophonePermissionStatus nextStatus) {
+    status = nextStatus;
+    _changes.add(nextStatus);
   }
 
   @override
-  Stream<bool> get changes => _changes.stream;
+  Stream<MicrophonePermissionStatus> get changes => _changes.stream;
 
   @override
-  Future<bool?> currentStatus() async => status;
+  Future<MicrophonePermissionStatus?> currentStatus() async => status;
 
   @override
   Future<void> openAppSettings() async {
     openSettingsCount += 1;
+  }
+
+  @override
+  Future<void> recordRequestResult({required bool granted}) async {
+    requestResults.add(granted);
   }
 }
 
