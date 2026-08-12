@@ -2,7 +2,7 @@
 
 Android-first, cross-platform, ultra-low-latency, two-way speech translation for face-to-face travel conversations, powered by the Google Gemini Live API and `gemini-3.5-live-translate-preview`.
 
-> Status: Android-first `0.4.0` preview. The app, bounded native Android audio path, real Gemini speech/text/audio pipeline, interruption-safe speaker switching, and privacy-safe runtime diagnostics are runnable; physical-device acoustic and latency hardening remains before a production release.
+> Status: Android-first `0.5.0` preview. The app, bounded native Android audio path, real Gemini speech/text/audio pipeline, interruption-safe speaker switching, system-audio interruption handling, and privacy-safe runtime diagnostics are runnable; physical-device acoustic and latency hardening remains before a production release.
 
 ## Product direction
 
@@ -69,7 +69,7 @@ Flutter is the accepted application framework. Android is the first implementati
 
 See the [Google Live Translation guide](https://ai.google.dev/gemini-api/docs/live-api/live-translate) for the current API contract.
 
-## Implemented through 0.4.0
+## Implemented through 0.5.0
 
 - Direct BYOK WebSocket connection to `gemini-3.5-live-translate-preview` with no application backend.
 - Source transcript, translated transcript, and translated 24 kHz PCM audio output.
@@ -91,6 +91,11 @@ See the [Google Live Translation guide](https://ai.google.dev/gemini-api/docs/li
   playback queue depth/drops. Reports contain no key, audio, or transcript text.
 - Terminal session/audio failures automatically release capture, both warm
   sessions, and playback before the user can retry.
+- Android uses one app-level audio-focus owner. Calls or other focus owners stop
+  capture and both Gemini sessions immediately; manual/lifecycle stops release
+  `AudioTrack`, communication mode, and focus before a later clean restart.
+- Diagnostics report the last actual output route, current focus ownership, and
+  system-interruption count without exposing key, audio, or transcript content.
 
 ## Quick start
 
@@ -106,13 +111,17 @@ Enter your own Google AI Studio key in the app. The key's project must be able t
 ## Validation status
 
 - `flutter analyze`: clean.
-- 35 automated protocol, session, PCM, transcript, controller, diagnostics, and
+- 36 automated protocol, session, PCM, transcript, controller, diagnostics, and
   responsive widget tests: passing.
 - Real API smoke: 16 kHz speech input produced source text, translated text, and 24 kHz audio.
 - Android API 36 emulator: install, cold start, Key validation, microphone
   permission, start/stop, live session readiness, ten rapid A/B switches during
   translated-audio output, language search, mute, and both layouts exercised
   without application crashes or playback/session errors.
+- Android API 36 audio-focus integration: active focus and speaker route
+  observed; manual stop released focus/recording; clean restart succeeded; an
+  external foreground service then took focus and the app stopped capture and
+  sessions while remaining foreground, with zero session/playback errors.
 - The preview APK is signed with a dedicated external release key and verified
   with Android's v2 signature scheme and 16 KB page alignment.
 - Still required before a production release: representative physical Android

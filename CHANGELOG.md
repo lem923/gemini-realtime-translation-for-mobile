@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-13
+
+### Added
+
+- Added a typed native-to-Flutter audio interruption stream. Android audio
+  focus loss now stops microphone capture, both Gemini sessions, and translated
+  playback instead of leaving a silently paused or privacy-sensitive session.
+- Added redacted diagnostics for system audio interruptions, actual output
+  route, and whether the app currently owns Android audio focus.
+- Added controller and platform-metric regression coverage plus an Android API
+  36 end-to-end focus-stealing test using an isolated local helper service.
+
+### Changed
+
+- Centralized Android audio-focus ownership in the native playback adapter and
+  disabled the recorder plugin's competing focus request.
+- Explicit stop, lifecycle stop, terminal failure, and system interruption now
+  release `AudioTrack`, communication mode, and audio focus. A later start
+  configures them again from a clean state.
+
+### Fixed
+
+- Stopping translation no longer leaves the application holding Android's
+  communication audio mode or audio focus.
+
 ## [0.4.0] - 2026-08-13
 
 ### Changed
