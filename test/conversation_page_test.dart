@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:realtime_translation/audio/audio_capture_gateway.dart';
 import 'package:realtime_translation/audio/pcm_playback_gateway.dart';
 import 'package:realtime_translation/conversation/conversation_controller.dart';
+import 'package:realtime_translation/conversation/conversation_models.dart';
 import 'package:realtime_translation/live_translate/live_event.dart';
 import 'package:realtime_translation/live_translate/live_translation_session.dart';
 import 'package:realtime_translation/permissions/microphone_permission_gateway.dart';
@@ -36,7 +37,8 @@ void main() {
 
     await tester.tap(find.byTooltip('面对面模式'));
     await tester.pumpAndSettle();
-    expect(find.text('点击这里，让 简体中文 讲话'), findsOneWidget);
+    expect(find.text('点击这里，用 简体中文 讲话'), findsOneWidget);
+    expect(find.text('等待 English 译文'), findsOneWidget);
     expect(find.byTooltip('标准对话模式'), findsOneWidget);
 
     await tester.tap(find.byTooltip('标准对话模式'));
@@ -53,6 +55,147 @@ void main() {
     expect(find.text('日本語'), findsOneWidget);
     expect(controller.languageA.code, 'ja');
 
+    controller.dispose();
+  });
+
+  testWidgets(
+    'routes face-to-face source to speaker and translation to listener',
+    (WidgetTester tester) async {
+      tester.view.physicalSize = const Size(1080, 2400);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final List<_NoopLiveSession> sessions = <_NoopLiveSession>[];
+      final ConversationController controller = ConversationController(
+        keyStore: _StoredKeyStore(),
+        audioCapture: _NoopAudioCapture(),
+        playback: _NoopPlayback(),
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) {
+              final _NoopLiveSession session = _NoopLiveSession();
+              sessions.add(session);
+              return session;
+            },
+      );
+      await controller.initialize();
+      await controller.startConversation();
+      await tester.pumpWidget(
+        MaterialApp(home: ConversationPage(controller: controller)),
+      );
+      await tester.pump();
+      await tester.tap(find.byTooltip('面对面模式'));
+      await tester.pumpAndSettle();
+
+      sessions.first
+        ..emit(const LiveInputTranscript('A 方中文原文', 'zh-Hans'))
+        ..emit(const LiveOutputTranscript('English for person B', 'en'));
+      await tester.pump();
+      await tester.pump();
+
+      final Finder sourceA = find.text('A 方中文原文');
+      final Finder translationForB = find.text('English for person B');
+      expect(sourceA, findsOneWidget);
+      expect(translationForB, findsOneWidget);
+      expect(
+        tester.getCenter(translationForB).dy,
+        lessThan(tester.getCenter(sourceA).dy),
+      );
+      expect(find.text('讲话'), findsOneWidget);
+      expect(find.text('译文'), findsOneWidget);
+      expect(
+        tester.getSize(find.byKey(const ValueKey<String>('face-half-a'))).width,
+        tester.getSize(find.byKey(const ValueKey<String>('face-half-b'))).width,
+      );
+      expect(
+        tester.getSemantics(sourceA),
+        matchesSemantics(
+          label: '讲话人 A，简体中文，讲话：A 方中文原文。点击切换讲话人',
+          isButton: true,
+          hasSelectedState: true,
+          isSelected: true,
+          hasTapAction: true,
+          isLiveRegion: true,
+        ),
+      );
+
+      sessions.first.emit(const LiveTurnComplete());
+      await tester.pump();
+      await tester.pump();
+      expect(sourceA, findsOneWidget);
+      expect(translationForB, findsOneWidget);
+
+      sessions.first.emit(const LiveInputTranscript('A 方第二句', 'zh-Hans'));
+      await tester.pump();
+      await tester.pump();
+      expect(find.text('English for person B'), findsNothing);
+      expect(find.text('正在翻译…'), findsOneWidget);
+
+      await tester.tap(find.text('正在翻译…'));
+      await tester.pumpAndSettle();
+      expect(controller.activeSpeaker, SpeakerSide.b);
+      expect(sessions, hasLength(2));
+      sessions[1]
+        ..emit(const LiveInputTranscript('Person B source', 'en'))
+        ..emit(const LiveOutputTranscript('给 A 方的中文译文', 'zh-Hans'));
+      await tester.pump();
+      await tester.pump();
+
+      final Finder sourceB = find.text('Person B source');
+      final Finder translationForA = find.text('给 A 方的中文译文');
+      expect(
+        tester.getCenter(sourceB).dy,
+        lessThan(tester.getCenter(translationForA).dy),
+      );
+      expect(
+        tester.getSemantics(translationForA).label,
+        contains('简体中文，译文：给 A 方的中文译文'),
+      );
+      controller.dispose();
+    },
+  );
+
+  testWidgets('keeps long face-to-face transcripts bounded on a short phone', (
+    WidgetTester tester,
+  ) async {
+    tester.view.physicalSize = const Size(360, 640);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final List<_NoopLiveSession> sessions = <_NoopLiveSession>[];
+    final ConversationController controller = ConversationController(
+      keyStore: _StoredKeyStore(),
+      audioCapture: _NoopAudioCapture(),
+      playback: _NoopPlayback(),
+      sessionFactory:
+          ({required String apiKey, required String targetLanguageCode}) {
+            final _NoopLiveSession session = _NoopLiveSession();
+            sessions.add(session);
+            return session;
+          },
+    );
+    await controller.initialize();
+    await controller.startConversation();
+    await tester.pumpWidget(
+      MaterialApp(home: ConversationPage(controller: controller)),
+    );
+    await tester.pump();
+    await tester.tap(find.byTooltip('面对面模式'));
+    await tester.pump();
+
+    final String longSource = List<String>.filled(30, '很长的旅行场景原文').join();
+    final String longTranslation = List<String>.filled(
+      30,
+      'A long translated travel sentence ',
+    ).join();
+    sessions.first
+      ..emit(LiveInputTranscript(longSource, 'zh-Hans'))
+      ..emit(LiveOutputTranscript(longTranslation, 'en'));
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.text(controller.interimSource), findsOneWidget);
+    expect(find.text(controller.interimTranslation), findsOneWidget);
+    expect(tester.takeException(), isNull);
     controller.dispose();
   });
 
