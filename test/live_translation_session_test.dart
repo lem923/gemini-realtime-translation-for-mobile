@@ -89,26 +89,26 @@ void main() {
       unawaited(
         runZonedGuarded(
           () async {
-          var readyEvents = 0;
-          var reconnectEvents = 0;
-          final StreamSubscription<Object?> eventSubscription = session.events
-              .listen((Object? event) {
-                if (event case LivePhaseChanged(
-                  phase: LiveSessionPhase.ready,
-                )) {
+            var readyEvents = 0;
+            var reconnectEvents = 0;
+            final StreamSubscription<Object?> eventSubscription = session.events
+                .listen((Object? event) {
+                  if (event case LivePhaseChanged(
+                    phase: LiveSessionPhase.ready,
+                  )) {
                     readyEvents += 1;
                     if (readyEvents == 2 && !reconnected.isCompleted) {
-                    reconnected.complete();
+                      reconnected.complete();
+                    }
+                  } else if (event case LivePhaseChanged(
+                    phase: LiveSessionPhase.reconnecting,
+                  )) {
+                    reconnectEvents += 1;
                   }
-                } else if (event case LivePhaseChanged(
-                  phase: LiveSessionPhase.reconnecting,
-                )) {
-                  reconnectEvents += 1;
-                }
-              });
-          await session.connect();
-          await reconnected.future.timeout(const Duration(seconds: 5));
-          expect(reconnectEvents, 1);
+                });
+            await session.connect();
+            await reconnected.future.timeout(const Duration(seconds: 5));
+            expect(reconnectEvents, 1);
             await session.close();
             await eventSubscription.cancel();
             await Future<void>.delayed(const Duration(milliseconds: 20));
