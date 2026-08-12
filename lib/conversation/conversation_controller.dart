@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math' as math;
+
 import 'package:flutter/foundation.dart';
 
 import '../audio/audio_capture_gateway.dart';
@@ -17,9 +18,11 @@ class ConversationController extends ChangeNotifier {
     AudioCaptureGateway? audioCapture,
     PcmPlaybackGateway? playback,
     LiveSessionFactory? sessionFactory,
+    int Function()? monotonicMicros,
   }) : _keyStore = keyStore ?? SecureApiKeyStore(),
        _audioCapture = audioCapture ?? RecordAudioCaptureGateway(),
        _playback = playback ?? PlatformPcmPlaybackGateway(),
+       _monotonicMicros = monotonicMicros ?? _createMonotonicClock(),
        _sessionFactory =
            sessionFactory ??
            (({required String apiKey, required String targetLanguageCode}) =>
@@ -32,7 +35,7 @@ class ConversationController extends ChangeNotifier {
   final AudioCaptureGateway _audioCapture;
   final PcmPlaybackGateway _playback;
   final LiveSessionFactory _sessionFactory;
-  final Stopwatch _monotonicClock = Stopwatch()..start();
+  final int Function() _monotonicMicros;
   final Map<SpeakerSide, LiveTranslationSession> _sessions =
       <SpeakerSide, LiveTranslationSession>{};
   final Map<SpeakerSide, StreamSubscription<LiveEvent>> _sessionSubscriptions =
@@ -50,12 +53,16 @@ class ConversationController extends ChangeNotifier {
 
   StreamSubscription<Uint8List>? _captureSubscription;
   Future<void> _playbackChain = Future<void>.value();
+  Future<void>? _stopOperation;
   String _apiKey = '';
   bool _rememberKey = false;
   bool _initialized = false;
   bool _audioMuted = false;
   bool _disposed = false;
+  bool _playbackFailureReported = false;
   int _captureBlockedUntilMicros = 0;
+  int _scheduledPlaybackEndMicros = 0;
+  int _conversationGeneration = 0;
   int _turnId = 0;
   String? _errorMessage;
   ConversationPhase _phase = ConversationPhase.needsKey;
@@ -63,6 +70,9 @@ class ConversationController extends ChangeNotifier {
   TranslationLanguage _languageA = languageByCode('zh-Hans');
   TranslationLanguage _languageB = languageByCode('en');
   final List<ConversationTurn> _turns = <ConversationTurn>[];
+
+  static const int maxHistoryTurns = 200;
+  static const int _playbackEchoGuardMicros = 80000;
 
   bool get initialized => _initialized;
   bool get hasApiKey => _apiKey.isNotEmpty;
@@ -174,17 +184,38 @@ class ConversationController extends ChangeNotifier {
     }
     _phase = ConversationPhase.connecting;
     _errorMessage = null;
+    final int generation = ++_conversationGeneration;
     notifyListeners();
     try {
       if (!await _audioCapture.hasPermission()) {
+        if (!_isCurrentConversation(generation)) {
+          return;
+        }
         _phase = ConversationPhase.permissionDenied;
         _errorMessage = '需要麦克风权限才能进行语音翻译';
         notifyListeners();
         return;
       }
+      if (!_isCurrentConversation(generation)) {
+        return;
+      }
+      await _waitForPlayback();
       await _playback.configure();
+      _resetPlaybackTimeline();
+      _playbackFailureReported = false;
+      if (!_isCurrentConversation(generation)) {
+        await _flushPlayback();
+        return;
+      }
       await _ensureSession(_activeSpeaker);
+      if (!_isCurrentConversation(generation)) {
+        return;
+      }
       final Stream<Uint8List> stream = await _audioCapture.start();
+      if (!_isCurrentConversation(generation)) {
+        await _audioCapture.stop();
+        return;
+      }
       _captureSubscription = stream.listen(
         _routeMicrophoneChunk,
         onError: (Object error, StackTrace stackTrace) {
@@ -199,6 +230,9 @@ class ConversationController extends ChangeNotifier {
       final SpeakerSide standby = _otherSide(_activeSpeaker);
       unawaited(_ensureSession(standby).catchError((Object _) {}));
     } catch (_) {
+      if (!_isCurrentConversation(generation)) {
+        return;
+      }
       _phase = ConversationPhase.failed;
       _errorMessage ??= '无法启动翻译，请检查网络和 API Key';
       notifyListeners();
@@ -227,8 +261,7 @@ class ConversationController extends ChangeNotifier {
   }
 
   void _routeMicrophoneChunk(Uint8List chunk) {
-    if (!isListening ||
-        _monotonicClock.elapsedMicroseconds < _captureBlockedUntilMicros) {
+    if (!isListening || _monotonicMicros() < _captureBlockedUntilMicros) {
       return;
     }
     _sessions[_activeSpeaker]?.sendAudio(chunk);
@@ -257,7 +290,7 @@ class ConversationController extends ChangeNotifier {
         _commitTurn(side);
       case LiveInterrupted():
         if (side == _activeSpeaker) {
-          _playbackChain = _playbackChain.then((_) => _playback.flush());
+          unawaited(_flushPlayback());
         }
       case LivePhaseChanged(:final LiveSessionPhase phase):
         if (side != _activeSpeaker) {
@@ -274,10 +307,11 @@ class ConversationController extends ChangeNotifier {
       case LiveSessionFailure(
         :final String userMessage,
         :final bool authenticationFailure,
+        :final bool retryable,
       ):
         if (side == _activeSpeaker) {
           _errorMessage = userMessage;
-          _phase = authenticationFailure
+          _phase = authenticationFailure || !retryable
               ? ConversationPhase.failed
               : ConversationPhase.reconnecting;
           notifyListeners();
@@ -292,11 +326,46 @@ class ConversationController extends ChangeNotifier {
         bytes.length *
         Duration.microsecondsPerSecond ~/
         (outputSampleRateHz * bytesPerSample);
-    _captureBlockedUntilMicros = math.max(
-      _captureBlockedUntilMicros,
-      _monotonicClock.elapsedMicroseconds + durationMicros + 80000,
-    );
-    _playbackChain = _playbackChain.then((_) => _playback.enqueue(bytes));
+    final int now = _monotonicMicros();
+    final int playbackStart = math.max(now, _scheduledPlaybackEndMicros);
+    _scheduledPlaybackEndMicros = playbackStart + durationMicros;
+    _captureBlockedUntilMicros =
+        _scheduledPlaybackEndMicros + _playbackEchoGuardMicros;
+    _appendPlayback(() => _playback.enqueue(bytes));
+  }
+
+  void _appendPlayback(Future<void> Function() operation) {
+    _playbackChain = _playbackChain.then((_) => operation()).catchError((
+      Object error,
+      StackTrace stackTrace,
+    ) {
+      _handlePlaybackFailure();
+    });
+  }
+
+  Future<void> _waitForPlayback() => _playbackChain;
+
+  Future<void> _flushPlayback() {
+    _resetPlaybackTimeline();
+    _appendPlayback(_playback.flush);
+    return _playbackChain;
+  }
+
+  void _resetPlaybackTimeline() {
+    final int now = _monotonicMicros();
+    _scheduledPlaybackEndMicros = now;
+    _captureBlockedUntilMicros = now;
+  }
+
+  void _handlePlaybackFailure() {
+    if (_disposed || _playbackFailureReported) {
+      return;
+    }
+    _playbackFailureReported = true;
+    _audioMuted = true;
+    _resetPlaybackTimeline();
+    _errorMessage = '译音播放失败，文字翻译仍可继续';
+    notifyListeners();
   }
 
   void _commitTurn(SpeakerSide side) {
@@ -322,6 +391,9 @@ class ConversationController extends ChangeNotifier {
         createdAt: DateTime.now(),
       ),
     );
+    if (_turns.length > maxHistoryTurns) {
+      _turns.removeRange(0, _turns.length - maxHistoryTurns);
+    }
     source.clear();
     translated.clear();
     notifyListeners();
@@ -335,14 +407,21 @@ class ConversationController extends ChangeNotifier {
     _activeSpeaker = side;
     _errorMessage = null;
     if (_captureSubscription != null) {
+      final int generation = _conversationGeneration;
       _phase = ConversationPhase.connecting;
       notifyListeners();
       try {
         await _ensureSession(side);
-        _phase = ConversationPhase.listening;
+        if (_isCurrentConversation(generation) &&
+            side == _activeSpeaker &&
+            _captureSubscription != null) {
+          _phase = ConversationPhase.listening;
+        }
       } catch (_) {
-        _phase = ConversationPhase.failed;
-        _errorMessage = '切换方向失败，请检查连接后重试';
+        if (_isCurrentConversation(generation) && side == _activeSpeaker) {
+          _phase = ConversationPhase.failed;
+          _errorMessage = '切换方向失败，请检查连接后重试';
+        }
       }
     }
     notifyListeners();
@@ -378,7 +457,9 @@ class ConversationController extends ChangeNotifier {
   void toggleAudioMuted() {
     _audioMuted = !_audioMuted;
     if (_audioMuted) {
-      _playbackChain = _playbackChain.then((_) => _playback.flush());
+      unawaited(_flushPlayback());
+    } else {
+      _playbackFailureReported = false;
     }
     notifyListeners();
   }
@@ -394,7 +475,24 @@ class ConversationController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> stopConversation({bool preserveError = false}) async {
+  Future<void> stopConversation({bool preserveError = false}) {
+    final Future<void>? inFlight = _stopOperation;
+    if (inFlight != null) {
+      return inFlight;
+    }
+    late final Future<void> operation;
+    operation = _stopConversationInternal(preserveError: preserveError)
+        .whenComplete(() {
+          if (identical(_stopOperation, operation)) {
+            _stopOperation = null;
+          }
+        });
+    _stopOperation = operation;
+    return operation;
+  }
+
+  Future<void> _stopConversationInternal({required bool preserveError}) async {
+    _conversationGeneration += 1;
     _commitTurn(_activeSpeaker);
     await _captureSubscription?.cancel();
     _captureSubscription = null;
@@ -408,7 +506,7 @@ class ConversationController extends ChangeNotifier {
       await session.close();
     }
     _sessions.clear();
-    await _playback.flush();
+    await _flushPlayback();
     if (!preserveError) {
       _errorMessage = null;
     }
@@ -421,14 +519,24 @@ class ConversationController extends ChangeNotifier {
   static SpeakerSide _otherSide(SpeakerSide side) =>
       side == SpeakerSide.a ? SpeakerSide.b : SpeakerSide.a;
 
+  bool _isCurrentConversation(int generation) =>
+      !_disposed && generation == _conversationGeneration;
+
+  static int Function() _createMonotonicClock() {
+    final Stopwatch stopwatch = Stopwatch()..start();
+    return () => stopwatch.elapsedMicroseconds;
+  }
+
   @override
   void dispose() {
     _disposed = true;
+    _conversationGeneration += 1;
     unawaited(_disposeResources());
     super.dispose();
   }
 
   Future<void> _disposeResources() async {
+    await _stopOperation;
     await _captureSubscription?.cancel();
     await _audioCapture.dispose();
     for (final StreamSubscription<LiveEvent> subscription
@@ -438,6 +546,7 @@ class ConversationController extends ChangeNotifier {
     for (final LiveTranslationSession session in _sessions.values) {
       await session.close();
     }
+    await _flushPlayback();
     await _playback.dispose();
   }
 }

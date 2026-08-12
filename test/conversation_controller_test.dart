@@ -124,6 +124,280 @@ void main() {
       controller.dispose();
     },
   );
+
+  test(
+    'blocks microphone capture until all queued translated audio ends',
+    () async {
+      int nowMicros = 0;
+      final _FakeAudioCapture capture = _FakeAudioCapture();
+      final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
+      final ConversationController controller = ConversationController(
+        keyStore: _MemoryKeyStore('stored-key'),
+        audioCapture: capture,
+        playback: _FakePlayback(),
+        monotonicMicros: () => nowMicros,
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) {
+              final _FakeLiveSession session = _FakeLiveSession();
+              sessions.add(session);
+              return session;
+            },
+      );
+
+      await controller.initialize();
+      await controller.startConversation();
+      await _flushEvents();
+      final Uint8List oneSecond = Uint8List(48000);
+      sessions.first
+        ..emit(LiveAudioChunk(oneSecond))
+        ..emit(LiveAudioChunk(oneSecond));
+      await _flushEvents();
+
+      nowMicros = 1500000;
+      capture.emit(<int>[1]);
+      expect(sessions.first.audio, isEmpty);
+      nowMicros = 2080001;
+      capture.emit(<int>[2]);
+      expect(sessions.first.audio, <List<int>>[
+        <int>[2],
+      ]);
+
+      await controller.stopConversation();
+      controller.dispose();
+    },
+  );
+
+  test('stop waits for pending playback before flushing', () async {
+    final Completer<void> enqueueGate = Completer<void>();
+    final _FakePlayback playback = _FakePlayback(enqueueGate: enqueueGate);
+    final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
+    final ConversationController controller = ConversationController(
+      keyStore: _MemoryKeyStore('stored-key'),
+      audioCapture: _FakeAudioCapture(),
+      playback: playback,
+      sessionFactory:
+          ({required String apiKey, required String targetLanguageCode}) {
+            final _FakeLiveSession session = _FakeLiveSession();
+            sessions.add(session);
+            return session;
+          },
+    );
+
+    await controller.initialize();
+    await controller.startConversation();
+    sessions.first.emit(LiveAudioChunk(Uint8List.fromList(<int>[1, 2])));
+    await _flushEvents();
+    final Future<void> stopping = controller.stopConversation();
+    await _flushEvents();
+    expect(playback.operations, <String>['configure', 'enqueue']);
+
+    enqueueGate.complete();
+    await stopping;
+    expect(playback.operations, <String>['configure', 'enqueue', 'flush']);
+    controller.dispose();
+  });
+
+  test(
+    'playback failure falls back to text and keeps queue operable',
+    () async {
+      final _FakePlayback playback = _FakePlayback(failNextEnqueue: true);
+      final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
+      final ConversationController controller = ConversationController(
+        keyStore: _MemoryKeyStore('stored-key'),
+        audioCapture: _FakeAudioCapture(),
+        playback: playback,
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) {
+              final _FakeLiveSession session = _FakeLiveSession();
+              sessions.add(session);
+              return session;
+            },
+      );
+
+      await controller.initialize();
+      await controller.startConversation();
+      sessions.first.emit(LiveAudioChunk(Uint8List.fromList(<int>[1, 2])));
+      await _flushEvents();
+      await _flushEvents();
+
+      expect(controller.audioMuted, isTrue);
+      expect(controller.errorMessage, contains('文字翻译'));
+      await controller.stopConversation(preserveError: true);
+      expect(playback.operations, contains('flush'));
+      controller.dispose();
+    },
+  );
+
+  test('stopping during connection prevents stale capture startup', () async {
+    final Completer<void> connectGate = Completer<void>();
+    final _FakeAudioCapture capture = _FakeAudioCapture();
+    final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
+    final ConversationController controller = ConversationController(
+      keyStore: _MemoryKeyStore('stored-key'),
+      audioCapture: capture,
+      playback: _FakePlayback(),
+      sessionFactory:
+          ({required String apiKey, required String targetLanguageCode}) {
+            final _FakeLiveSession session = _FakeLiveSession(
+              connectGate: connectGate,
+            );
+            sessions.add(session);
+            return session;
+          },
+    );
+
+    await controller.initialize();
+    final Future<void> starting = controller.startConversation();
+    await _flushEvents();
+    expect(sessions, hasLength(1));
+    final Future<void> stopping = controller.stopConversation();
+    connectGate.complete();
+    await Future.wait(<Future<void>>[starting, stopping]);
+
+    expect(capture.started, isFalse);
+    expect(controller.phase, ConversationPhase.idle);
+    controller.dispose();
+  });
+
+  test('coalesces simultaneous stop requests', () async {
+    final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
+    final ConversationController controller = ConversationController(
+      keyStore: _MemoryKeyStore('stored-key'),
+      audioCapture: _FakeAudioCapture(),
+      playback: _FakePlayback(),
+      sessionFactory:
+          ({required String apiKey, required String targetLanguageCode}) {
+            final _FakeLiveSession session = _FakeLiveSession();
+            sessions.add(session);
+            return session;
+          },
+    );
+
+    await controller.initialize();
+    await controller.startConversation();
+    await _flushEvents();
+    await Future.wait(<Future<void>>[
+      controller.stopConversation(),
+      controller.stopConversation(),
+      controller.stopConversation(),
+    ]);
+
+    expect(sessions, isNotEmpty);
+    expect(sessions.every((session) => session.closeCount == 1), isTrue);
+    expect(controller.phase, ConversationPhase.idle);
+    controller.dispose();
+  });
+
+  test(
+    'a stale speaker connection cannot override the latest direction',
+    () async {
+      final Completer<void> speakerBGate = Completer<void>();
+      final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
+      final ConversationController controller = ConversationController(
+        keyStore: _MemoryKeyStore('stored-key'),
+        audioCapture: _FakeAudioCapture(),
+        playback: _FakePlayback(),
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) {
+              final _FakeLiveSession session = _FakeLiveSession(
+                connectGate: sessions.isEmpty ? null : speakerBGate,
+              );
+              sessions.add(session);
+              return session;
+            },
+      );
+
+      await controller.initialize();
+      await controller.startConversation();
+      expect(sessions, hasLength(2));
+      final Future<void> switchingToB = controller.selectSpeaker(SpeakerSide.b);
+      final Future<void> switchingBackToA = controller.selectSpeaker(
+        SpeakerSide.a,
+      );
+      await switchingBackToA;
+      expect(controller.activeSpeaker, SpeakerSide.a);
+      expect(controller.phase, ConversationPhase.listening);
+
+      speakerBGate.complete();
+      await switchingToB;
+      expect(controller.activeSpeaker, SpeakerSide.a);
+      expect(controller.phase, ConversationPhase.listening);
+
+      await controller.stopConversation();
+      controller.dispose();
+    },
+  );
+
+  test(
+    'maps retryable and terminal session failures to distinct phases',
+    () async {
+      final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
+      final ConversationController controller = ConversationController(
+        keyStore: _MemoryKeyStore('stored-key'),
+        audioCapture: _FakeAudioCapture(),
+        playback: _FakePlayback(),
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) {
+              final _FakeLiveSession session = _FakeLiveSession();
+              sessions.add(session);
+              return session;
+            },
+      );
+
+      await controller.initialize();
+      await controller.startConversation();
+      sessions.first.emit(
+        const LiveSessionFailure(
+          userMessage: '暂时错误',
+          authenticationFailure: false,
+          retryable: true,
+        ),
+      );
+      expect(controller.phase, ConversationPhase.reconnecting);
+      sessions.first.emit(
+        const LiveSessionFailure(
+          userMessage: '配额不足',
+          authenticationFailure: false,
+          retryable: false,
+        ),
+      );
+      expect(controller.phase, ConversationPhase.failed);
+      expect(controller.errorMessage, '配额不足');
+
+      await controller.stopConversation();
+      controller.dispose();
+    },
+  );
+
+  test('bounds long conversation history to the latest 200 turns', () async {
+    final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
+    final ConversationController controller = ConversationController(
+      keyStore: _MemoryKeyStore('stored-key'),
+      audioCapture: _FakeAudioCapture(),
+      playback: _FakePlayback(),
+      sessionFactory:
+          ({required String apiKey, required String targetLanguageCode}) {
+            final _FakeLiveSession session = _FakeLiveSession();
+            sessions.add(session);
+            return session;
+          },
+    );
+
+    await controller.initialize();
+    await controller.startConversation();
+    for (int index = 1; index <= 250; index += 1) {
+      sessions.first
+        ..emit(LiveInputTranscript('source $index', 'en'))
+        ..emit(LiveOutputTranscript('target $index', 'zh-Hans'))
+        ..emit(const LiveTurnComplete());
+    }
+
+    expect(controller.turns, hasLength(ConversationController.maxHistoryTurns));
+    expect(controller.turns.first.id, 51);
+    expect(controller.turns.last.id, 250);
+    await controller.stopConversation();
+    controller.dispose();
+  });
 }
 
 Future<void> _flushEvents() => Future<void>.delayed(Duration.zero);
@@ -171,26 +445,43 @@ class _FakeAudioCapture implements AudioCaptureGateway {
 }
 
 class _FakePlayback implements PcmPlaybackGateway {
+  _FakePlayback({this.enqueueGate, this.failNextEnqueue = false});
+
+  final Completer<void>? enqueueGate;
+  bool failNextEnqueue;
   final List<List<int>> enqueued = <List<int>>[];
+  final List<String> operations = <String>[];
 
   @override
-  Future<void> configure() async {}
+  Future<void> configure() async => operations.add('configure');
 
   @override
   Future<void> dispose() async {}
 
   @override
-  Future<void> enqueue(Uint8List pcm) async => enqueued.add(pcm.toList());
+  Future<void> enqueue(Uint8List pcm) async {
+    operations.add('enqueue');
+    enqueued.add(pcm.toList());
+    if (failNextEnqueue) {
+      failNextEnqueue = false;
+      throw StateError('playback failed');
+    }
+    await enqueueGate?.future;
+  }
 
   @override
-  Future<void> flush() async {}
+  Future<void> flush() async => operations.add('flush');
 }
 
 class _FakeLiveSession implements LiveTranslationSession {
+  _FakeLiveSession({this.connectGate});
+
+  final Completer<void>? connectGate;
   final StreamController<LiveEvent> _controller =
       StreamController<LiveEvent>.broadcast(sync: true);
   final List<List<int>> audio = <List<int>>[];
   bool closed = false;
+  int closeCount = 0;
   bool _ready = false;
 
   void emit(LiveEvent event) => _controller.add(event);
@@ -202,13 +493,19 @@ class _FakeLiveSession implements LiveTranslationSession {
   bool get isReady => _ready;
 
   @override
-  Future<void> connect() async => _ready = true;
+  Future<void> connect() async {
+    await connectGate?.future;
+    if (!closed) {
+      _ready = true;
+    }
+  }
 
   @override
   void sendAudio(Uint8List pcm) => audio.add(pcm.toList());
 
   @override
   Future<void> close() async {
+    closeCount += 1;
     closed = true;
     _ready = false;
     await _controller.close();

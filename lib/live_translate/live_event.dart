@@ -49,8 +49,10 @@ class LiveSessionFailure extends LiveEvent {
   const LiveSessionFailure({
     required this.userMessage,
     required this.authenticationFailure,
+    required this.retryable,
   });
 
   final String userMessage;
   final bool authenticationFailure;
+  final bool retryable;
 }

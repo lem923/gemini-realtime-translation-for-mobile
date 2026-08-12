@@ -88,12 +88,29 @@ class GeminiLiveProtocol {
           code == 403 ||
           status == 'UNAUTHENTICATED' ||
           status == 'PERMISSION_DENIED';
+      final bool quotaFailure = code == 429 || status == 'RESOURCE_EXHAUSTED';
+      final bool configurationFailure =
+          code == 400 ||
+          code == 404 ||
+          status == 'INVALID_ARGUMENT' ||
+          status == 'NOT_FOUND' ||
+          status == 'FAILED_PRECONDITION';
+      final bool retryable =
+          !authenticationFailure &&
+          !quotaFailure &&
+          !configurationFailure &&
+          (code == null || code >= 500 || status == 'UNAVAILABLE');
       events.add(
         LiveSessionFailure(
           userMessage: authenticationFailure
               ? 'API Key 无效或没有此模型的访问权限'
-              : 'Gemini Live 会话返回错误，请稍后重试',
+              : quotaFailure
+              ? 'Gemini API 配额或并发限制已达到，请稍后重试'
+              : configurationFailure
+              ? 'Gemini Live 模型或会话配置当前不可用'
+              : 'Gemini Live 服务暂时不可用，正在重连',
           authenticationFailure: authenticationFailure,
+          retryable: retryable,
         ),
       );
     }

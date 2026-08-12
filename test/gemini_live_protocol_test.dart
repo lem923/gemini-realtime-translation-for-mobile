@@ -74,4 +74,39 @@ void main() {
     expect(events.whereType<LiveAudioChunk>().single.bytes, <int>[1, 2, 3, 4]);
     expect(events.whereType<LiveTurnComplete>(), hasLength(1));
   });
+
+  test('classifies authentication and quota errors as terminal', () {
+    final LiveSessionFailure authentication =
+        GeminiLiveProtocol.parseServerMessage(
+          jsonEncode(<String, Object?>{
+            'error': <String, Object?>{
+              'code': 403,
+              'status': 'PERMISSION_DENIED',
+            },
+          }),
+        ).whereType<LiveSessionFailure>().single;
+    final LiveSessionFailure quota = GeminiLiveProtocol.parseServerMessage(
+      jsonEncode(<String, Object?>{
+        'error': <String, Object?>{'code': 429, 'status': 'RESOURCE_EXHAUSTED'},
+      }),
+    ).whereType<LiveSessionFailure>().single;
+
+    expect(authentication.authenticationFailure, isTrue);
+    expect(authentication.retryable, isFalse);
+    expect(quota.authenticationFailure, isFalse);
+    expect(quota.retryable, isFalse);
+    expect(quota.userMessage, contains('配额'));
+  });
+
+  test('classifies temporary server errors as retryable', () {
+    final LiveSessionFailure failure = GeminiLiveProtocol.parseServerMessage(
+      jsonEncode(<String, Object?>{
+        'error': <String, Object?>{'code': 503, 'status': 'UNAVAILABLE'},
+      }),
+    ).whereType<LiveSessionFailure>().single;
+
+    expect(failure.authenticationFailure, isFalse);
+    expect(failure.retryable, isTrue);
+    expect(failure.userMessage, contains('重连'));
+  });
 }

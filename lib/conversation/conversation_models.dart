@@ -36,7 +36,12 @@ class ConversationTurn {
 }
 
 class TranscriptAccumulator {
+  TranscriptAccumulator({this.maxCharacters = 8000})
+    : assert(maxCharacters > 0, 'maxCharacters must be positive');
+
+  final int maxCharacters;
   String _value = '';
+  bool _truncated = false;
 
   String get value => _value.trim();
 
@@ -47,9 +52,12 @@ class TranscriptAccumulator {
     if (incoming.isEmpty) {
       return;
     }
-    if (incoming.startsWith(_value.trim()) &&
-        incoming.length >= _value.length) {
+    final String current = _value.trim();
+    if ((incoming.startsWith(current) ||
+            (_truncated && incoming.contains(current))) &&
+        incoming.length >= current.length) {
       _value = incoming;
+      _enforceLimit();
       return;
     }
     if (_value.isEmpty) {
@@ -60,9 +68,26 @@ class TranscriptAccumulator {
         !RegExp(r'\s$').hasMatch(_value) &&
         !RegExp(r'^[,.;:!?，。！？；：]').hasMatch(incoming);
     _value = '$_value${needsSpace ? ' ' : ''}$incoming';
+    _enforceLimit();
   }
+
+  void _enforceLimit() {
+    if (_value.length <= maxCharacters) {
+      return;
+    }
+    int start = _value.length - maxCharacters;
+    if (start < _value.length && _isLowSurrogate(_value.codeUnitAt(start))) {
+      start += 1;
+    }
+    _value = _value.substring(start).trimLeft();
+    _truncated = true;
+  }
+
+  static bool _isLowSurrogate(int codeUnit) =>
+      codeUnit >= 0xDC00 && codeUnit <= 0xDFFF;
 
   void clear() {
     _value = '';
+    _truncated = false;
   }
 }

@@ -122,21 +122,37 @@ class GeminiLiveSession implements LiveTranslationSession {
       await setupCompleter.future.timeout(const Duration(seconds: 15));
       _reconnectAttempt = 0;
     } on TimeoutException {
-      _emitFailure('连接 Gemini 超时，请检查网络后重试');
+      _emitFailure('连接 Gemini 超时，请检查网络后重试', retryable: _reconnectAttempt > 0);
       await _discardChannel(generation);
+      _continueReconnectIfNeeded();
       rethrow;
     } on SocketException {
-      _emitFailure('无法连接 Gemini，请检查网络');
+      _emitFailure('无法连接 Gemini，请检查网络', retryable: _reconnectAttempt > 0);
       await _discardChannel(generation);
+      _continueReconnectIfNeeded();
       rethrow;
     } on WebSocketChannelException {
-      _emitFailure('无法建立 Gemini Live 会话');
+      _emitFailure('无法建立 Gemini Live 会话', retryable: _reconnectAttempt > 0);
       await _discardChannel(generation);
+      _continueReconnectIfNeeded();
+      rethrow;
+    } on _SessionRejected catch (rejection) {
+      await _discardChannel(generation);
+      if (rejection.retryable) {
+        _continueReconnectIfNeeded();
+      }
       rethrow;
     } catch (_) {
-      _emitFailure('无法建立 Gemini Live 会话');
+      _emitFailure('无法建立 Gemini Live 会话', retryable: _reconnectAttempt > 0);
       await _discardChannel(generation);
+      _continueReconnectIfNeeded();
       rethrow;
+    }
+  }
+
+  void _continueReconnectIfNeeded() {
+    if (_reconnectAttempt > 0 && !_disposed) {
+      _scheduleReconnect();
     }
   }
 
@@ -198,13 +214,21 @@ class GeminiLiveSession implements LiveTranslationSession {
           _resumptionHandle = handle;
         case LiveGoAway():
           _scheduleReconnect(immediate: true);
-        case LiveSessionFailure(:final bool authenticationFailure):
+        case LiveSessionFailure(
+          :final bool authenticationFailure,
+          :final bool retryable,
+        ):
           _ready = false;
           final Completer<void>? completer = _setupCompleter;
           if (completer != null && !completer.isCompleted) {
-            completer.completeError(StateError('Gemini session rejected'));
+            completer.completeError(
+              _SessionRejected(
+                authenticationFailure: authenticationFailure,
+                retryable: retryable,
+              ),
+            );
           }
-          if (!authenticationFailure) {
+          if (retryable) {
             _scheduleReconnect();
           }
         default:
@@ -230,7 +254,7 @@ class GeminiLiveSession implements LiveTranslationSession {
     }
     _ready = false;
     _failPendingSetup();
-    _emitFailure('Gemini Live 连接中断，正在重连');
+    _emitFailure('Gemini Live 连接中断，正在重连', retryable: true);
     _scheduleReconnect();
   }
 
@@ -239,23 +263,28 @@ class GeminiLiveSession implements LiveTranslationSession {
       return;
     }
     _ready = false;
-    _failPendingSetup();
     if (closeCode == status.policyViolation) {
-      _events.add(
-        const LiveSessionFailure(
-          userMessage: 'API Key、模型权限或会话配置无效',
-          authenticationFailure: true,
-        ),
+      const LiveSessionFailure failure = LiveSessionFailure(
+        userMessage: 'API Key、模型权限或会话配置无效',
+        authenticationFailure: true,
+        retryable: false,
       );
+      _failPendingSetup(
+        const _SessionRejected(authenticationFailure: true, retryable: false),
+      );
+      _events.add(failure);
       return;
     }
+    _failPendingSetup();
     _scheduleReconnect();
   }
 
-  void _failPendingSetup() {
+  void _failPendingSetup([Object? error]) {
     final Completer<void>? completer = _setupCompleter;
     if (completer != null && !completer.isCompleted) {
-      completer.completeError(StateError('Gemini session closed during setup'));
+      completer.completeError(
+        error ?? StateError('Gemini session closed during setup'),
+      );
     }
   }
 
@@ -268,6 +297,7 @@ class GeminiLiveSession implements LiveTranslationSession {
         const LiveSessionFailure(
           userMessage: '多次重连失败，请停止后重新开始',
           authenticationFailure: false,
+          retryable: false,
         ),
       );
       return;
@@ -282,9 +312,13 @@ class GeminiLiveSession implements LiveTranslationSession {
     });
   }
 
-  void _emitFailure(String message) {
+  void _emitFailure(String message, {required bool retryable}) {
     _events.add(
-      LiveSessionFailure(userMessage: message, authenticationFailure: false),
+      LiveSessionFailure(
+        userMessage: message,
+        authenticationFailure: false,
+        retryable: retryable,
+      ),
     );
   }
 
@@ -318,4 +352,14 @@ class GeminiLiveSession implements LiveTranslationSession {
     _events.add(const LivePhaseChanged(LiveSessionPhase.closed));
     await _events.close();
   }
+}
+
+class _SessionRejected implements Exception {
+  const _SessionRejected({
+    required this.authenticationFailure,
+    required this.retryable,
+  });
+
+  final bool authenticationFailure;
+  final bool retryable;
 }
