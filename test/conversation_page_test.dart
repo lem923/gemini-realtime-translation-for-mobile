@@ -343,6 +343,7 @@ void main() {
 
     expect(find.text('运行诊断'), findsOneWidget);
     expect(find.textContaining('不含 Key、音频或对话内容'), findsOneWidget);
+    expect(find.textContaining('Gemini Token 输入 / 输出 / 合计'), findsOneWidget);
     expect(find.text('复制'), findsOneWidget);
     expect(find.text('关闭'), findsOneWidget);
 

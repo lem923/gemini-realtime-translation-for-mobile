@@ -9,15 +9,20 @@ Future<void> main(List<String> arguments) async {
   final String apiKey = Platform.environment['GEMINI_API_KEY']?.trim() ?? '';
   final String pcmPath = Platform.environment['LIVE_TEST_PCM']?.trim() ?? '';
   final String target =
-      Platform.environment['LIVE_TEST_TARGET']?.trim() ?? 'zh-Hans';
-  final Uri endpoint = Uri.parse('wss://generativelanguage.googleapis.com/ws');
-  stdout.writeln(
-    'proxy_configured=${HttpClient.findProxyFromEnvironment(endpoint.replace(scheme: 'https')) != 'DIRECT'}',
+      Platform.environment['LIVE_TEST_TARGET']?.trim() ?? 'en';
+  final int? idleSeconds = int.tryParse(
+    Platform.environment['LIVE_TEST_IDLE_SECONDS']?.trim() ?? '1260',
   );
-  if (apiKey.isEmpty || pcmPath.isEmpty) {
+  if (apiKey.isEmpty || pcmPath.isEmpty || idleSeconds == null) {
     stderr.writeln(
-      'Set GEMINI_API_KEY and LIVE_TEST_PCM (raw 16 kHz mono PCM16).',
+      'Set GEMINI_API_KEY, LIVE_TEST_PCM, and an integer '
+      'LIVE_TEST_IDLE_SECONDS (default 1260).',
     );
+    exitCode = 64;
+    return;
+  }
+  if (idleSeconds < 0) {
+    stderr.writeln('LIVE_TEST_IDLE_SECONDS must not be negative.');
     exitCode = 64;
     return;
   }
@@ -32,22 +37,24 @@ Future<void> main(List<String> arguments) async {
     apiKey: apiKey,
     targetLanguageCode: target,
   );
-  final Completer<void> completed = Completer<void>();
+  final Completer<void> outputComplete = Completer<void>();
+  Completer<void>? readyWaiter;
+  int readyEvents = 0;
+  int reconnectEvents = 0;
+  int failureEvents = 0;
   int inputTranscriptCharacters = 0;
   int outputTranscriptCharacters = 0;
   int outputAudioBytes = 0;
   int promptTokens = 0;
   int responseTokens = 0;
   int totalTokens = 0;
-  bool setupComplete = false;
-  bool audioSent = false;
-  String? failure;
+
   void completeWhenOutputArrives() {
     if (inputTranscriptCharacters > 0 &&
         outputTranscriptCharacters > 0 &&
         outputAudioBytes > 0 &&
-        !completed.isCompleted) {
-      completed.complete();
+        !outputComplete.isCompleted) {
+      outputComplete.complete();
     }
   }
 
@@ -56,7 +63,15 @@ Future<void> main(List<String> arguments) async {
   ) {
     switch (event) {
       case LivePhaseChanged(:final LiveSessionPhase phase):
-        if (phase == LiveSessionPhase.ready) setupComplete = true;
+        if (phase == LiveSessionPhase.ready) {
+          readyEvents += 1;
+          final Completer<void>? waiter = readyWaiter;
+          if (waiter != null && !waiter.isCompleted) {
+            waiter.complete();
+          }
+        } else if (phase == LiveSessionPhase.reconnecting) {
+          reconnectEvents += 1;
+        }
       case LiveInputTranscript(:final String text):
         inputTranscriptCharacters += text.length;
         completeWhenOutputArrives();
@@ -70,10 +85,8 @@ Future<void> main(List<String> arguments) async {
         promptTokens = event.promptTokenCount;
         responseTokens = event.responseTokenCount;
         totalTokens = event.totalTokenCount;
-      case LiveTurnComplete():
-        if (!completed.isCompleted) completed.complete();
-      case LiveSessionFailure(:final String userMessage):
-        failure = userMessage;
+      case LiveSessionFailure():
+        failureEvents += 1;
       default:
         break;
     }
@@ -81,6 +94,27 @@ Future<void> main(List<String> arguments) async {
 
   try {
     await session.connect();
+    final Stopwatch idleWatch = Stopwatch()..start();
+    while (idleWatch.elapsed.inSeconds < idleSeconds) {
+      final int remaining = idleSeconds - idleWatch.elapsed.inSeconds;
+      await Future<void>.delayed(Duration(seconds: remaining.clamp(1, 60)));
+      stdout.writeln(
+        'long_session_progress '
+        'elapsed_seconds=${idleWatch.elapsed.inSeconds.clamp(0, idleSeconds)} '
+        'ready=${session.isReady} '
+        'ready_events=$readyEvents '
+        'reconnect_events=$reconnectEvents '
+        'failure_events=$failureEvents',
+      );
+    }
+
+    if (!session.isReady) {
+      readyWaiter = Completer<void>();
+      if (!session.isReady) {
+        await readyWaiter.future.timeout(const Duration(seconds: 45));
+      }
+    }
+
     final Uint8List pcm = await pcmFile.readAsBytes();
     const int chunkBytes = 3200;
     for (int offset = 0; offset < pcm.length; offset += chunkBytes) {
@@ -88,15 +122,20 @@ Future<void> main(List<String> arguments) async {
       session.sendAudio(Uint8List.fromList(pcm.sublist(offset, end)));
       await Future<void>.delayed(const Duration(milliseconds: 100));
     }
-    audioSent = true;
-    await completed.future.timeout(const Duration(seconds: 45));
+    await outputComplete.future.timeout(const Duration(seconds: 45));
+
     final bool passed =
-        failure == null &&
+        session.isReady &&
         inputTranscriptCharacters > 0 &&
         outputTranscriptCharacters > 0 &&
-        outputAudioBytes > 0;
+        outputAudioBytes > 0 &&
+        failureEvents == 0;
     stdout.writeln(
-      'live_smoke passed=$passed '
+      'long_session_smoke passed=$passed '
+      'idle_seconds=$idleSeconds '
+      'ready_events=$readyEvents '
+      'reconnect_events=$reconnectEvents '
+      'failure_events=$failureEvents '
       'input_text_chars=$inputTranscriptCharacters '
       'output_text_chars=$outputTranscriptCharacters '
       'output_audio_bytes=$outputAudioBytes '
@@ -104,14 +143,17 @@ Future<void> main(List<String> arguments) async {
       'response_tokens=$responseTokens '
       'total_tokens=$totalTokens',
     );
-    if (!passed) exitCode = 1;
+    if (!passed) {
+      exitCode = 1;
+    }
   } on Object catch (error) {
     stderr.writeln(
-      'live_smoke failed '
-      'setup_complete=$setupComplete '
-      'audio_sent=$audioSent '
-      'server_failure=${failure != null} '
-      'failure_message=${failure ?? 'none'} '
+      'long_session_smoke failed '
+      'idle_seconds=$idleSeconds '
+      'ready=${session.isReady} '
+      'ready_events=$readyEvents '
+      'reconnect_events=$reconnectEvents '
+      'failure_events=$failureEvents '
       'input_text_chars=$inputTranscriptCharacters '
       'output_text_chars=$outputTranscriptCharacters '
       'output_audio_bytes=$outputAudioBytes '

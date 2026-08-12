@@ -21,6 +21,9 @@ void main() {
     expect(generation['responseModalities'], <String>['AUDIO']);
     expect(setup, contains('inputAudioTranscription'));
     expect(setup, contains('outputAudioTranscription'));
+    expect(setup['contextWindowCompression'], <String, Object?>{
+      'slidingWindow': <String, Object?>{},
+    });
     expect(generation, isNot(contains('inputAudioTranscription')));
     expect(generation, isNot(contains('outputAudioTranscription')));
     expect(setup, isNot(contains('sessionResumption')));
@@ -73,6 +76,34 @@ void main() {
     expect(events.whereType<LiveOutputTranscript>(), hasLength(1));
     expect(events.whereType<LiveAudioChunk>().single.bytes, <int>[1, 2, 3, 4]);
     expect(events.whereType<LiveTurnComplete>(), hasLength(1));
+  });
+
+  test('parses redacted token usage with defensive numeric handling', () {
+    final LiveUsageMetadata usage = GeminiLiveProtocol.parseServerMessage(
+      jsonEncode(<String, Object?>{
+        'usageMetadata': <String, Object?>{
+          'promptTokenCount': '125',
+          'responseTokenCount': 30,
+          'totalTokenCount': 155,
+        },
+      }),
+    ).whereType<LiveUsageMetadata>().single;
+
+    expect(usage.promptTokenCount, 125);
+    expect(usage.responseTokenCount, 30);
+    expect(usage.totalTokenCount, 155);
+
+    final LiveUsageMetadata malformed = GeminiLiveProtocol.parseServerMessage(
+      jsonEncode(<String, Object?>{
+        'usageMetadata': <String, Object?>{
+          'promptTokenCount': -1,
+          'responseTokenCount': 'not-a-number',
+        },
+      }),
+    ).whereType<LiveUsageMetadata>().single;
+    expect(malformed.promptTokenCount, 0);
+    expect(malformed.responseTokenCount, 0);
+    expect(malformed.totalTokenCount, 0);
   });
 
   test('classifies authentication and quota errors as terminal', () {

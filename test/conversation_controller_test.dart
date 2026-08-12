@@ -1168,6 +1168,70 @@ void main() {
     controller.dispose();
   });
 
+  test('keeps a logical 20-minute media session bounded', () async {
+    int nowMicros = 0;
+    final _FakeAudioCapture capture = _FakeAudioCapture();
+    final _FakePlayback playback = _FakePlayback();
+    final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
+    final ConversationController controller = ConversationController(
+      keyStore: _MemoryKeyStore('stored-key'),
+      audioCapture: capture,
+      playback: playback,
+      monotonicMicros: () => nowMicros,
+      sessionFactory:
+          ({required String apiKey, required String targetLanguageCode}) {
+            final _FakeLiveSession session = _FakeLiveSession();
+            sessions.add(session);
+            return session;
+          },
+    );
+
+    await controller.initialize();
+    await controller.startConversation();
+    controller.toggleAudioMuted();
+    const int logicalChunks = 20 * 60 * 10;
+    const int chunksPerTurn = 50;
+    const int audioChunksPerTurn = 10;
+    for (int chunkIndex = 1; chunkIndex <= logicalChunks; chunkIndex += 1) {
+      nowMicros += 100000;
+      capture.emit(<int>[chunkIndex & 0xff, (chunkIndex >> 8) & 0xff]);
+      if (chunkIndex % chunksPerTurn != 0) {
+        continue;
+      }
+      final int turn = chunkIndex ~/ chunksPerTurn;
+      sessions.first
+        ..emit(LiveInputTranscript('source $turn', 'zh-Hans'))
+        ..emit(LiveOutputTranscript('target $turn', 'en'));
+      for (
+        int audioIndex = 0;
+        audioIndex < audioChunksPerTurn;
+        audioIndex += 1
+      ) {
+        sessions.first.emit(LiveAudioChunk(Uint8List(4800)));
+      }
+      sessions.first.emit(const LiveTurnComplete());
+    }
+
+    final ConversationDiagnostics diagnostics = await controller
+        .collectDiagnostics();
+    expect(diagnostics.sessionDurationMilliseconds, 20 * 60 * 1000);
+    expect(
+      diagnostics.microphoneChunksSent + diagnostics.microphoneChunksSuppressed,
+      logicalChunks,
+    );
+    expect(diagnostics.completedTurns, 240);
+    expect(diagnostics.outputAudioBytes, 240 * 48000);
+    expect(controller.turns, hasLength(ConversationController.maxHistoryTurns));
+    expect(controller.turns.first.id, 41);
+    expect(controller.turns.last.id, 240);
+    expect(controller.hasReplayAudio(41), isFalse);
+    expect(controller.hasReplayAudio(240), isTrue);
+    expect(playback.enqueued, isEmpty);
+
+    await controller.stopConversation();
+    controller.dispose();
+  });
+
   test('collects bounded redacted session and playback diagnostics', () async {
     int nowMicros = 1000000;
     final _FakeAudioCapture capture = _FakeAudioCapture();
@@ -1203,6 +1267,21 @@ void main() {
     sessions.first.emit(const LiveOutputTranscript('秘密译文', 'zh-Hans'));
     nowMicros = 1080000;
     sessions.first.emit(LiveAudioChunk(Uint8List(4800)));
+    sessions.first
+      ..emit(
+        const LiveUsageMetadata(
+          promptTokenCount: 100,
+          responseTokenCount: 20,
+          totalTokenCount: 120,
+        ),
+      )
+      ..emit(
+        const LiveUsageMetadata(
+          promptTokenCount: 140,
+          responseTokenCount: 35,
+          totalTokenCount: 175,
+        ),
+      );
     nowMicros = 1090000;
     capture.emit(<int>[3, 4]);
     sessions.first
@@ -1216,6 +1295,13 @@ void main() {
         ),
       );
     await controller.selectSpeaker(SpeakerSide.b);
+    sessions[1].emit(
+      const LiveUsageMetadata(
+        promptTokenCount: 80,
+        responseTokenCount: 15,
+        totalTokenCount: 95,
+      ),
+    );
     nowMicros = 1200000;
 
     final ConversationDiagnostics diagnostics = await controller
@@ -1229,6 +1315,10 @@ void main() {
     expect(diagnostics.directionSwitches, 1);
     expect(diagnostics.reconnectEvents, 1);
     expect(diagnostics.sessionFailures, 1);
+    expect(diagnostics.geminiPromptTokens, 220);
+    expect(diagnostics.geminiResponseTokens, 50);
+    expect(diagnostics.geminiTotalTokens, 270);
+    expect(diagnostics.geminiUsageAvailable, isTrue);
     expect(diagnostics.listeningReadyMilliseconds, 0);
     expect(diagnostics.firstMicrophoneSentMilliseconds, 0);
     expect(diagnostics.firstSourceTextMilliseconds, 50);
@@ -1247,6 +1337,7 @@ void main() {
     expect(report, isNot(contains('秘密译文')));
     expect(report, isNot(contains('stored-key')));
     expect(report, contains('不含 Key、音频或对话内容'));
+    expect(report, contains('220 / 50 / 270'));
 
     nowMicros = 1300000;
     await controller.stopConversation();
@@ -1254,6 +1345,15 @@ void main() {
     final ConversationDiagnostics stopped = await controller
         .collectDiagnostics();
     expect(stopped.sessionDurationMilliseconds, 300);
+
+    await controller.startConversation();
+    final ConversationDiagnostics restarted = await controller
+        .collectDiagnostics();
+    expect(restarted.geminiPromptTokens, 0);
+    expect(restarted.geminiResponseTokens, 0);
+    expect(restarted.geminiTotalTokens, 0);
+    expect(restarted.geminiUsageAvailable, isFalse);
+    await controller.stopConversation();
     controller.dispose();
   });
 }
