@@ -105,6 +105,15 @@ void main() {
       tester.getSemantics(find.text('麦克风权限被拒绝')),
       matchesSemantics(label: '翻译状态：麦克风权限被拒绝', isLiveRegion: true),
     );
+    expect(
+      tester.getSemantics(find.text('需要麦克风权限才能进行语音翻译')),
+      matchesSemantics(label: '错误：需要麦克风权限才能进行语音翻译', isLiveRegion: true),
+    );
+    final Finder bannerAction = find.ancestor(
+      of: find.text('打开系统设置'),
+      matching: find.byType(TextButton),
+    );
+    expect(tester.getSize(bannerAction).height, greaterThanOrEqualTo(48));
 
     await tester.tap(find.text('打开麦克风设置'));
     await tester.pump();
@@ -152,15 +161,6 @@ void main() {
         kind: LiveFailureKind.offline,
       ),
     );
-    expect(
-      tester.getSemantics(find.text('需要麦克风权限才能进行语音翻译')),
-      matchesSemantics(label: '错误：需要麦克风权限才能进行语音翻译', isLiveRegion: true),
-    );
-    final Finder bannerAction = find.ancestor(
-      of: find.text('打开系统设置'),
-      matching: find.byType(TextButton),
-    );
-    expect(tester.getSize(bannerAction).height, greaterThanOrEqualTo(48));
     await tester.pump();
     await tester.pump();
     expect(find.text('网络不可用，等待恢复'), findsOneWidget);
