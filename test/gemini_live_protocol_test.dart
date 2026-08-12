@@ -44,6 +44,33 @@ void main() {
     expect(audio['data'], base64Encode(bytes));
   });
 
+  test('serializes resumption and parses a resumable go-away notice', () {
+    final Map<String, Object?> setup =
+        (jsonDecode(
+                  GeminiLiveProtocol.setupMessage(
+                    targetLanguageCode: 'en',
+                    resumptionHandle: 'resume-handle',
+                  ),
+                )
+                as Map<String, Object?>)['setup']
+            as Map<String, Object?>;
+    expect(setup['sessionResumption'], <String, Object?>{
+      'handle': 'resume-handle',
+    });
+
+    final List<LiveEvent> events = GeminiLiveProtocol.parseServerMessage(
+      jsonEncode(<String, Object?>{
+        'sessionResumptionUpdate': <String, Object?>{
+          'resumable': true,
+          'newHandle': 'next-handle',
+        },
+        'goAway': <String, Object?>{'timeLeft': '5s'},
+      }),
+    );
+    expect(events.whereType<LiveResumptionHandle>().single.handle, 'next-handle');
+    expect(events.whereType<LiveGoAway>(), hasLength(1));
+  });
+
   test('parses transcripts, audio, and turn completion', () {
     final String message = jsonEncode(<String, Object?>{
       'serverContent': <String, Object?>{
