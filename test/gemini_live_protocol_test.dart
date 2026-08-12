@@ -52,8 +52,7 @@ void main() {
       ),
     );
     final Map<String, Object?> root = decoded! as Map<String, Object?>;
-    final Map<String, Object?> setup =
-        root['setup']! as Map<String, Object?>;
+    final Map<String, Object?> setup = root['setup']! as Map<String, Object?>;
     expect(setup['sessionResumption'], <String, Object?>{
       'handle': 'resume-handle',
     });
@@ -67,7 +66,10 @@ void main() {
         'goAway': <String, Object?>{'timeLeft': '5s'},
       }),
     );
-    expect(events.whereType<LiveResumptionHandle>().single.handle, 'next-handle');
+    expect(
+      events.whereType<LiveResumptionHandle>().single.handle,
+      'next-handle',
+    );
     expect(events.whereType<LiveGoAway>(), hasLength(1));
   });
 
