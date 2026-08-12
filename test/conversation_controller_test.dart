@@ -386,6 +386,216 @@ void main() {
     },
   );
 
+  test(
+    'replays completed translated audio and releases idle playback',
+    () async {
+      final _FakePlayback playback = _FakePlayback();
+      final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
+      final ConversationController controller = ConversationController(
+        keyStore: _MemoryKeyStore('stored-key'),
+        audioCapture: _FakeAudioCapture(),
+        playback: playback,
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) {
+              final _FakeLiveSession session = _FakeLiveSession();
+              sessions.add(session);
+              return session;
+            },
+      );
+
+      await controller.initialize();
+      await controller.startConversation();
+      final Uint8List replayAudio = Uint8List.fromList(
+        List<int>.generate(4800, (int index) => index & 0xff),
+      );
+      sessions.first
+        ..emit(const LiveInputTranscript('hello', 'en'))
+        ..emit(const LiveOutputTranscript('你好', 'zh-Hans'))
+        ..emit(LiveAudioChunk(replayAudio))
+        ..emit(const LiveTurnComplete());
+      await _flushEvents();
+      final int turnId = controller.turns.single.id;
+      expect(controller.hasReplayAudio(turnId), isTrue);
+
+      await controller.stopConversation();
+      final int enqueuesBeforeReplay = playback.enqueued.length;
+      await controller.replayTurn(turnId);
+
+      expect(playback.enqueued.length, enqueuesBeforeReplay + 1);
+      expect(playback.enqueued.last, replayAudio);
+      expect(
+        playback.operations.where((value) => value == 'configure'),
+        hasLength(2),
+      );
+      expect(playback.disposeCount, greaterThanOrEqualTo(2));
+      expect(controller.replayingTurnId, isNull);
+      controller.dispose();
+    },
+  );
+
+  test(
+    'active replay blocks capture and can be cancelled immediately',
+    () async {
+      int nowMicros = 0;
+      final _FakeAudioCapture capture = _FakeAudioCapture();
+      final _FakePlayback playback = _FakePlayback();
+      final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
+      final ConversationController controller = ConversationController(
+        keyStore: _MemoryKeyStore('stored-key'),
+        audioCapture: capture,
+        playback: playback,
+        monotonicMicros: () => nowMicros,
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) {
+              final _FakeLiveSession session = _FakeLiveSession();
+              sessions.add(session);
+              return session;
+            },
+      );
+
+      await controller.initialize();
+      await controller.startConversation();
+      sessions.first
+        ..emit(const LiveInputTranscript('hello', 'en'))
+        ..emit(const LiveOutputTranscript('你好', 'zh-Hans'))
+        ..emit(LiveAudioChunk(Uint8List(48000)))
+        ..emit(const LiveTurnComplete());
+      await _flushEvents();
+      final Future<void> replay = controller.replayTurn(
+        controller.turns.single.id,
+      );
+      await _flushEvents();
+      expect(controller.replayingTurnId, isNotNull);
+
+      capture.emit(<int>[1]);
+      expect(sessions.first.audio, isEmpty);
+      await controller.stopReplay();
+      await replay;
+      expect(controller.replayingTurnId, isNull);
+
+      nowMicros = 2000000;
+      capture.emit(<int>[2]);
+      expect(sessions.first.audio, <List<int>>[
+        <int>[2],
+      ]);
+      await controller.stopConversation();
+      controller.dispose();
+    },
+  );
+
+  test(
+    'fresh translated audio interrupts replay without dropping output',
+    () async {
+      final _FakePlayback playback = _FakePlayback();
+      final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
+      final ConversationController controller = ConversationController(
+        keyStore: _MemoryKeyStore('stored-key'),
+        audioCapture: _FakeAudioCapture(),
+        playback: playback,
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) {
+              final _FakeLiveSession session = _FakeLiveSession();
+              sessions.add(session);
+              return session;
+            },
+      );
+
+      await controller.initialize();
+      await controller.startConversation();
+      sessions.first
+        ..emit(const LiveInputTranscript('hello', 'en'))
+        ..emit(const LiveOutputTranscript('你好', 'zh-Hans'))
+        ..emit(LiveAudioChunk(Uint8List(48000)))
+        ..emit(const LiveTurnComplete());
+      await _flushEvents();
+      final Future<void> replay = controller.replayTurn(
+        controller.turns.single.id,
+      );
+      await _flushEvents();
+      expect(controller.replayingTurnId, isNotNull);
+
+      final Uint8List freshAudio = Uint8List.fromList(<int>[9, 8, 7, 6]);
+      sessions.first.emit(LiveAudioChunk(freshAudio));
+      await _flushEvents();
+      await replay;
+
+      expect(controller.replayingTurnId, isNull);
+      expect(playback.enqueued.last, freshAudio);
+      await controller.stopConversation();
+      controller.dispose();
+    },
+  );
+
+  test('does not retain an oversized turn for replay', () async {
+    final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
+    final ConversationController controller = ConversationController(
+      keyStore: _MemoryKeyStore('stored-key'),
+      audioCapture: _FakeAudioCapture(),
+      playback: _FakePlayback(),
+      sessionFactory:
+          ({required String apiKey, required String targetLanguageCode}) {
+            final _FakeLiveSession session = _FakeLiveSession();
+            sessions.add(session);
+            return session;
+          },
+    );
+
+    await controller.initialize();
+    await controller.startConversation();
+    sessions.first
+      ..emit(const LiveInputTranscript('long turn', 'en'))
+      ..emit(const LiveOutputTranscript('长句', 'zh-Hans'))
+      ..emit(
+        LiveAudioChunk(
+          Uint8List(ConversationController.maxReplayTurnBytes + 1),
+        ),
+      )
+      ..emit(const LiveTurnComplete());
+    await _flushEvents();
+
+    expect(controller.turns, hasLength(1));
+    expect(controller.hasReplayAudio(controller.turns.single.id), isFalse);
+    await controller.stopConversation();
+    controller.dispose();
+  });
+
+  test('evicts oldest replay audio while preserving text history', () async {
+    final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
+    final ConversationController controller = ConversationController(
+      keyStore: _MemoryKeyStore('stored-key'),
+      audioCapture: _FakeAudioCapture(),
+      playback: _FakePlayback(),
+      sessionFactory:
+          ({required String apiKey, required String targetLanguageCode}) {
+            final _FakeLiveSession session = _FakeLiveSession();
+            sessions.add(session);
+            return session;
+          },
+    );
+
+    await controller.initialize();
+    await controller.startConversation();
+    controller.toggleAudioMuted();
+    const int audioBytes = 1400000;
+    for (int index = 0; index < 6; index += 1) {
+      sessions.first
+        ..emit(LiveInputTranscript('source $index', 'en'))
+        ..emit(LiveOutputTranscript('translated $index', 'zh-Hans'))
+        ..emit(LiveAudioChunk(Uint8List(audioBytes)))
+        ..emit(const LiveTurnComplete());
+    }
+    await _flushEvents();
+
+    expect(controller.turns, hasLength(6));
+    expect(controller.hasReplayAudio(controller.turns.first.id), isFalse);
+    expect(controller.hasReplayAudio(controller.turns.last.id), isTrue);
+    controller.clearHistory();
+    expect(controller.turns, isEmpty);
+    expect(controller.hasReplayAudio(6), isFalse);
+    await controller.stopConversation();
+    controller.dispose();
+  });
+
   test('stopping during connection prevents stale capture startup', () async {
     final Completer<void> connectGate = Completer<void>();
     final _FakeAudioCapture capture = _FakeAudioCapture();

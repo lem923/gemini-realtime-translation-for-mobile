@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 
@@ -56,16 +57,20 @@ class ConversationController extends ChangeNotifier {
   StreamSubscription<PcmPlaybackEvent>? _playbackEventSubscription;
   Future<void> _playbackChain = Future<void>.value();
   Future<void>? _stopOperation;
+  Future<void>? _replayOperation;
   String _apiKey = '';
   bool _rememberKey = false;
   bool _initialized = false;
   bool _audioMuted = false;
   bool _disposed = false;
   bool _playbackFailureReported = false;
+  bool _playbackConfigured = false;
   int _captureBlockedUntilMicros = 0;
   int _scheduledPlaybackEndMicros = 0;
   int _conversationGeneration = 0;
+  int _replayGeneration = 0;
   int _turnId = 0;
+  int? _replayingTurnId;
   int? _diagnosticStartedMicros;
   int? _diagnosticStoppedMicros;
   int? _firstMicrophoneSentMicros;
@@ -91,18 +96,35 @@ class ConversationController extends ChangeNotifier {
   TranslationLanguage _languageA = languageByCode('zh-Hans');
   TranslationLanguage _languageB = languageByCode('en');
   final List<ConversationTurn> _turns = <ConversationTurn>[];
+  final Map<SpeakerSide, BytesBuilder> _turnAudio = <SpeakerSide, BytesBuilder>{
+    SpeakerSide.a: BytesBuilder(copy: true),
+    SpeakerSide.b: BytesBuilder(copy: true),
+  };
+  final Map<SpeakerSide, bool> _turnAudioOverflow = <SpeakerSide, bool>{
+    SpeakerSide.a: false,
+    SpeakerSide.b: false,
+  };
+  final Map<int, Uint8List> _replayAudio = <int, Uint8List>{};
+  int _replayAudioBytes = 0;
 
   static const int maxHistoryTurns = 200;
+  static const int maxReplayTurnBytes =
+      outputSampleRateHz * bytesPerSample * 30;
+  static const int maxReplayCacheBytes = 8 * 1024 * 1024;
+  static const int _replayChunkBytes =
+      outputSampleRateHz * bytesPerSample ~/ 10;
   static const int _playbackEchoGuardMicros = 80000;
 
   bool get initialized => _initialized;
   bool get hasApiKey => _apiKey.isNotEmpty;
   bool get rememberKey => _rememberKey;
   bool get audioMuted => _audioMuted;
+  int? get replayingTurnId => _replayingTurnId;
   bool get isListening => _phase == ConversationPhase.listening;
   bool get isBusy =>
       _phase == ConversationPhase.connecting ||
       _phase == ConversationPhase.reconnecting ||
+      _replayingTurnId != null ||
       _stopOperation != null;
   ConversationPhase get phase => _phase;
   SpeakerSide get activeSpeaker => _activeSpeaker;
@@ -118,6 +140,8 @@ class ConversationController extends ChangeNotifier {
   String? get errorMessage => _errorMessage;
   List<ConversationTurn> get turns =>
       List<ConversationTurn>.unmodifiable(_turns);
+
+  bool hasReplayAudio(int turnId) => _replayAudio.containsKey(turnId);
 
   Future<void> initialize() async {
     _playbackEventSubscription ??= _playback.events.listen(
@@ -226,9 +250,7 @@ class ConversationController extends ChangeNotifier {
       if (!_isCurrentConversation(generation)) {
         return;
       }
-      await _waitForPlayback();
-      await _playback.configure();
-      _resetPlaybackTimeline();
+      await _ensurePlaybackConfigured();
       _playbackFailureReported = false;
       if (!_isCurrentConversation(generation)) {
         await _flushPlayback();
@@ -329,11 +351,18 @@ class ConversationController extends ChangeNotifier {
         }
       case LiveAudioChunk(:final Uint8List bytes):
         if (side == _activeSpeaker) {
+          _cacheTurnAudio(side, bytes);
           _firstTranslatedAudioMilliseconds ??=
               _elapsedFromFirstSendMilliseconds();
           _outputAudioChunks += 1;
           _outputAudioBytes += bytes.length;
           if (!_audioMuted) {
+            if (_cancelReplayState()) {
+              // Fresh translated speech has priority over an old replay. The
+              // flush and live chunk share the same serialized playback chain,
+              // so replay audio cannot leak into the new response.
+              unawaited(_flushPlayback());
+            }
             _queuePlayback(bytes);
           }
         }
@@ -341,7 +370,12 @@ class ConversationController extends ChangeNotifier {
         _commitTurn(side);
       case LiveInterrupted():
         if (side == _activeSpeaker) {
-          unawaited(_flushPlayback());
+          _discardTurnAudio(side);
+          if (_replayingTurnId != null || _replayOperation != null) {
+            unawaited(stopReplay());
+          } else {
+            unawaited(_flushPlayback());
+          }
         }
       case LivePhaseChanged(:final LiveSessionPhase phase):
         if (side != _activeSpeaker) {
@@ -404,6 +438,16 @@ class ConversationController extends ChangeNotifier {
 
   Future<void> _waitForPlayback() => _playbackChain;
 
+  Future<void> _ensurePlaybackConfigured() async {
+    await _waitForPlayback();
+    if (_playbackConfigured) {
+      return;
+    }
+    await _playback.configure();
+    _playbackConfigured = true;
+    _resetPlaybackTimeline();
+  }
+
   Future<void> _flushPlayback() {
     _resetPlaybackTimeline();
     _appendPlayback(_playback.flush);
@@ -429,9 +473,17 @@ class ConversationController extends ChangeNotifier {
   }
 
   void _handlePlaybackEvent(PcmPlaybackEvent event) {
-    if (_disposed ||
-        event is! PcmPlaybackInterrupted ||
-        _phase == ConversationPhase.failed) {
+    if (_disposed || event is! PcmPlaybackInterrupted) {
+      return;
+    }
+    if (_replayingTurnId != null) {
+      _audioInterruptions += 1;
+      _errorMessage = '音频被系统中断，回放已停止';
+      unawaited(stopReplay());
+      notifyListeners();
+      return;
+    }
+    if (_phase == ConversationPhase.failed) {
       return;
     }
     if (_captureSubscription == null && !isBusy && !isListening) {
@@ -441,10 +493,60 @@ class ConversationController extends ChangeNotifier {
     _terminateConversation('音频被系统中断，翻译已停止');
   }
 
+  void _cacheTurnAudio(SpeakerSide side, Uint8List bytes) {
+    if (bytes.isEmpty || _turnAudioOverflow[side] == true) {
+      return;
+    }
+    final BytesBuilder builder = _turnAudio[side]!;
+    if (builder.length + bytes.length > maxReplayTurnBytes) {
+      _discardTurnAudio(side, overflowed: true);
+      return;
+    }
+    builder.add(bytes);
+  }
+
+  void _discardTurnAudio(SpeakerSide side, {bool overflowed = false}) {
+    _turnAudio[side]!.clear();
+    _turnAudioOverflow[side] = overflowed;
+  }
+
+  Uint8List? _takeTurnAudio(SpeakerSide side) {
+    final BytesBuilder builder = _turnAudio[side]!;
+    final bool overflowed = _turnAudioOverflow[side] == true;
+    final Uint8List? audio = !overflowed && builder.isNotEmpty
+        ? builder.takeBytes()
+        : null;
+    if (overflowed) {
+      builder.clear();
+    }
+    _turnAudioOverflow[side] = false;
+    return audio;
+  }
+
+  void _storeReplayAudio(int turnId, Uint8List? audio) {
+    if (audio == null || audio.isEmpty) {
+      return;
+    }
+    _replayAudio[turnId] = audio;
+    _replayAudioBytes += audio.length;
+    while (_replayAudioBytes > maxReplayCacheBytes && _replayAudio.isNotEmpty) {
+      final int oldestTurnId = _replayAudio.keys.first;
+      _removeReplayAudio(oldestTurnId);
+    }
+  }
+
+  void _removeReplayAudio(int turnId) {
+    final Uint8List? removed = _replayAudio.remove(turnId);
+    if (removed != null) {
+      _replayAudioBytes = math.max(0, _replayAudioBytes - removed.length);
+    }
+  }
+
   void _commitTurn(SpeakerSide side) {
     final TranscriptAccumulator source = _sourceTranscripts[side]!;
     final TranscriptAccumulator translated = _translatedTranscripts[side]!;
     if (source.isEmpty && translated.isEmpty) {
+      _discardTurnAudio(side);
       return;
     }
     final TranslationLanguage sourceLanguage = side == SpeakerSide.a
@@ -453,9 +555,10 @@ class ConversationController extends ChangeNotifier {
     final TranslationLanguage targetLanguage = side == SpeakerSide.a
         ? _languageB
         : _languageA;
+    final int turnId = ++_turnId;
     _turns.add(
       ConversationTurn(
-        id: ++_turnId,
+        id: turnId,
         speaker: side,
         sourceLanguage: sourceLanguage,
         targetLanguage: targetLanguage,
@@ -464,8 +567,16 @@ class ConversationController extends ChangeNotifier {
         createdAt: DateTime.now(),
       ),
     );
+    _storeReplayAudio(turnId, _takeTurnAudio(side));
     if (_turns.length > maxHistoryTurns) {
-      _turns.removeRange(0, _turns.length - maxHistoryTurns);
+      final List<ConversationTurn> removed = _turns.sublist(
+        0,
+        _turns.length - maxHistoryTurns,
+      );
+      for (final ConversationTurn turn in removed) {
+        _removeReplayAudio(turn.id);
+      }
+      _turns.removeRange(0, removed.length);
     }
     _diagnosticCompletedTurns += 1;
     source.clear();
@@ -474,6 +585,9 @@ class ConversationController extends ChangeNotifier {
   }
 
   Future<void> selectSpeaker(SpeakerSide side) async {
+    if (_replayingTurnId != null || _replayOperation != null) {
+      await stopReplay();
+    }
     if (side == _activeSpeaker) {
       return;
     }
@@ -542,7 +656,11 @@ class ConversationController extends ChangeNotifier {
   void toggleAudioMuted() {
     _audioMuted = !_audioMuted;
     if (_audioMuted) {
-      unawaited(_flushPlayback());
+      if (_replayingTurnId != null || _replayOperation != null) {
+        unawaited(stopReplay());
+      } else {
+        unawaited(_flushPlayback());
+      }
     } else {
       _playbackFailureReported = false;
     }
@@ -550,15 +668,146 @@ class ConversationController extends ChangeNotifier {
   }
 
   void clearHistory() {
+    unawaited(stopReplay());
     _turns.clear();
+    _replayAudio.clear();
+    _replayAudioBytes = 0;
     for (final TranscriptAccumulator value in _sourceTranscripts.values) {
       value.clear();
     }
     for (final TranscriptAccumulator value in _translatedTranscripts.values) {
       value.clear();
     }
+    for (final SpeakerSide side in SpeakerSide.values) {
+      _discardTurnAudio(side);
+    }
     notifyListeners();
   }
+
+  Future<void> replayTurn(int turnId) async {
+    if (_replayingTurnId == turnId) {
+      await stopReplay();
+      return;
+    }
+    await stopReplay();
+    final Uint8List? audio = _replayAudio[turnId];
+    if (_disposed || audio == null || audio.isEmpty || _audioMuted) {
+      return;
+    }
+    if (_phase == ConversationPhase.connecting ||
+        _phase == ConversationPhase.reconnecting ||
+        _stopOperation != null) {
+      return;
+    }
+    final int generation = ++_replayGeneration;
+    _replayingTurnId = turnId;
+    _errorMessage = null;
+    notifyListeners();
+
+    late final Future<void> operation;
+    operation = _runReplay(audio, generation).whenComplete(() {
+      if (identical(_replayOperation, operation)) {
+        _replayOperation = null;
+      }
+    });
+    _replayOperation = operation;
+    await operation;
+  }
+
+  Future<void> stopReplay() async {
+    if (!_cancelReplayState()) {
+      return;
+    }
+    await _flushPlayback();
+    if (_captureSubscription == null && _stopOperation == null) {
+      await _releasePlayback();
+    }
+  }
+
+  bool _cancelReplayState() {
+    if (_replayingTurnId == null && _replayOperation == null) {
+      return false;
+    }
+    // Cancellation is token based. Do not wait for the old replay task here:
+    // it may be inside its real-time pacing delay (or a widget-test fake
+    // timer), while callers such as stopConversation must release resources
+    // immediately. Once invalidated, the old task cannot enqueue another
+    // chunk and its completion handler cannot clear a newer operation.
+    _replayGeneration += 1;
+    _replayingTurnId = null;
+    _replayOperation = null;
+    _resetPlaybackTimeline();
+    if (!_disposed) {
+      notifyListeners();
+    }
+    return true;
+  }
+
+  Future<void> _runReplay(Uint8List audio, int generation) async {
+    final bool releaseWhenComplete = _captureSubscription == null;
+    try {
+      await _ensurePlaybackConfigured();
+      if (!_isCurrentReplay(generation)) {
+        return;
+      }
+      await _flushPlayback();
+      if (!_isCurrentReplay(generation)) {
+        return;
+      }
+      final int now = _monotonicMicros();
+      final int durationMicros =
+          audio.length *
+          Duration.microsecondsPerSecond ~/
+          (outputSampleRateHz * bytesPerSample);
+      _scheduledPlaybackEndMicros = now + durationMicros;
+      _captureBlockedUntilMicros =
+          _scheduledPlaybackEndMicros + _playbackEchoGuardMicros;
+      _maximumScheduledPlaybackMicros = math.max(
+        _maximumScheduledPlaybackMicros,
+        durationMicros,
+      );
+      for (
+        int offset = 0;
+        offset < audio.length && _isCurrentReplay(generation);
+        offset += _replayChunkBytes
+      ) {
+        final int end = math.min(offset + _replayChunkBytes, audio.length);
+        final Uint8List chunk = Uint8List.sublistView(audio, offset, end);
+        _appendPlayback(() => _playback.enqueue(chunk));
+        await _waitForPlayback();
+        if (_playbackFailureReported || !_isCurrentReplay(generation)) {
+          break;
+        }
+        final int chunkDurationMicros =
+            chunk.length *
+            Duration.microsecondsPerSecond ~/
+            (outputSampleRateHz * bytesPerSample);
+        await Future<void>.delayed(Duration(microseconds: chunkDurationMicros));
+      }
+      if (_isCurrentReplay(generation)) {
+        await Future<void>.delayed(
+          const Duration(microseconds: _playbackEchoGuardMicros),
+        );
+      }
+    } catch (_) {
+      _handlePlaybackFailure();
+    } finally {
+      if (_isCurrentReplay(generation)) {
+        _replayingTurnId = null;
+        _resetPlaybackTimeline();
+        if (releaseWhenComplete) {
+          await _flushPlayback();
+          await _releasePlayback();
+        }
+        if (!_disposed) {
+          notifyListeners();
+        }
+      }
+    }
+  }
+
+  bool _isCurrentReplay(int generation) =>
+      !_disposed && generation == _replayGeneration;
 
   Future<void> stopConversation({bool preserveError = false}) {
     return _stopConversationWithOutcome(preserveError: preserveError);
@@ -596,6 +845,7 @@ class ConversationController extends ChangeNotifier {
     ConversationPhase? finalPhase,
     String? finalError,
   }) async {
+    await stopReplay();
     _conversationGeneration += 1;
     if (_diagnosticStartedMicros != null) {
       _diagnosticStoppedMicros ??= _monotonicMicros();
@@ -652,6 +902,8 @@ class ConversationController extends ChangeNotifier {
       await _playback.dispose();
     } catch (_) {
       _handlePlaybackFailure();
+    } finally {
+      _playbackConfigured = false;
     }
   }
 
@@ -761,6 +1013,7 @@ class ConversationController extends ChangeNotifier {
 
   Future<void> _disposeResources() async {
     await _stopOperation;
+    await stopReplay();
     await _playbackEventSubscription?.cancel();
     _playbackEventSubscription = null;
     await _captureSubscription?.cancel();
