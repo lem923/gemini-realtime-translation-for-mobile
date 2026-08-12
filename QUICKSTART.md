@@ -37,13 +37,27 @@ flutter run
 
 In the app, set language A and B, enter your own API key, leave “remember” off unless local persistence is desired, then tap **开始翻译**. Tap A or B whenever the person speaking changes.
 
-Build an installable APK:
+Build a local debug APK:
 
 ```bash
+flutter build apk --debug
+```
+
+For a signed release APK, provide a private keystore entirely outside the
+repository:
+
+```bash
+ANDROID_KEYSTORE_PATH='/absolute/path/to/upload.jks' \
+ANDROID_KEYSTORE_PASSWORD='store-password' \
+ANDROID_KEY_ALIAS='upload' \
+ANDROID_KEY_PASSWORD='key-password' \
 flutter build apk --release
 ```
 
-The output is `build/app/outputs/flutter-apk/app-release.apk`. The repository preview uses the generated debug signing key for installable release-mode testing; configure a private release keystore before store distribution.
+The output is `build/app/outputs/flutter-apk/app-release.apk`. Release builds
+fail closed when any signing variable is missing, preventing accidental
+publication with the Android debug certificate. Never commit the keystore or
+its credentials.
 
 Review these documents for project context:
 

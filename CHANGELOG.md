@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-13
+
+### Added
+
+- Added regression coverage for lifecycle cancellation, simultaneous stops,
+  stale speaker switches, long sessions, cumulative echo suppression, playback
+  failures, and retryable versus terminal Gemini errors.
+- Added native Android playback queue metrics and a 1.5-second latency ceiling.
+
+### Changed
+
+- Serialized translated PCM writes and flushes, including partial native
+  `AudioTrack.write` handling.
+- Bounded individual transcripts to 8,000 characters and conversation history
+  to the latest 200 turns.
+- Hardened reconnect behavior, lifecycle shutdown, Android backup policy, and
+  cleartext-network policy.
+- Release builds now require an external private signing key and can no longer
+  silently use the Android debug certificate.
+
 ## [0.1.0] - 2026-08-13
 
 ### Added
