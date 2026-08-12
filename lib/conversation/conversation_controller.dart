@@ -469,6 +469,15 @@ class ConversationController extends ChangeNotifier {
       _phase = ConversationPhase.connecting;
       notifyListeners();
       try {
+        // A manual direction change is a barge-in boundary. Stop any speech
+        // translated for the previous speaker before reopening the microphone
+        // for the new direction, otherwise stale output can be recaptured.
+        await _flushPlayback();
+        if (!_isCurrentConversation(generation) ||
+            side != _activeSpeaker ||
+            _captureSubscription == null) {
+          return;
+        }
         await _ensureSession(side);
         if (_isCurrentConversation(generation) &&
             side == _activeSpeaker &&

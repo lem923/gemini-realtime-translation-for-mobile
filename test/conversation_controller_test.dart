@@ -199,6 +199,119 @@ void main() {
   });
 
   test(
+    'speaker switch flushes stale translation and reopens the new direction',
+    () async {
+      int nowMicros = 0;
+      final _FakeAudioCapture capture = _FakeAudioCapture();
+      final _FakePlayback playback = _FakePlayback();
+      final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
+      final ConversationController controller = ConversationController(
+        keyStore: _MemoryKeyStore('stored-key'),
+        audioCapture: capture,
+        playback: playback,
+        monotonicMicros: () => nowMicros,
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) {
+              final _FakeLiveSession session = _FakeLiveSession();
+              sessions.add(session);
+              return session;
+            },
+      );
+
+      await controller.initialize();
+      await controller.startConversation();
+      await _flushEvents();
+      sessions.first.emit(LiveAudioChunk(Uint8List(48000)));
+      await _flushEvents();
+
+      capture.emit(<int>[1]);
+      expect(sessions.first.audio, isEmpty);
+      await controller.selectSpeaker(SpeakerSide.b);
+      expect(playback.operations, <String>['configure', 'enqueue', 'flush']);
+
+      capture.emit(<int>[2]);
+      expect(sessions[1].audio, <List<int>>[
+        <int>[2],
+      ]);
+      expect(controller.phase, ConversationPhase.listening);
+
+      nowMicros = 1;
+      await controller.stopConversation();
+      controller.dispose();
+    },
+  );
+
+  test(
+    'speaker switch keeps text available when playback flush fails',
+    () async {
+      final _FakePlayback playback = _FakePlayback(failNextFlush: true);
+      final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
+      final ConversationController controller = ConversationController(
+        keyStore: _MemoryKeyStore('stored-key'),
+        audioCapture: _FakeAudioCapture(),
+        playback: playback,
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) {
+              final _FakeLiveSession session = _FakeLiveSession();
+              sessions.add(session);
+              return session;
+            },
+      );
+
+      await controller.initialize();
+      await controller.startConversation();
+      await _flushEvents();
+      await controller.selectSpeaker(SpeakerSide.b);
+
+      expect(controller.activeSpeaker, SpeakerSide.b);
+      expect(controller.phase, ConversationPhase.listening);
+      expect(controller.audioMuted, isTrue);
+      expect(controller.errorMessage, contains('文字翻译'));
+
+      await controller.stopConversation(preserveError: true);
+      controller.dispose();
+    },
+  );
+
+  test('speaker switch does not route capture until flush completes', () async {
+    final Completer<void> flushGate = Completer<void>();
+    final _FakeAudioCapture capture = _FakeAudioCapture();
+    final _FakePlayback playback = _FakePlayback(flushGate: flushGate);
+    final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
+    final ConversationController controller = ConversationController(
+      keyStore: _MemoryKeyStore('stored-key'),
+      audioCapture: capture,
+      playback: playback,
+      sessionFactory:
+          ({required String apiKey, required String targetLanguageCode}) {
+            final _FakeLiveSession session = _FakeLiveSession();
+            sessions.add(session);
+            return session;
+          },
+    );
+
+    await controller.initialize();
+    await controller.startConversation();
+    await _flushEvents();
+    final Future<void> switching = controller.selectSpeaker(SpeakerSide.b);
+    await _flushEvents();
+
+    expect(controller.phase, ConversationPhase.connecting);
+    capture.emit(<int>[1]);
+    expect(sessions[1].audio, isEmpty);
+
+    flushGate.complete();
+    await switching;
+    capture.emit(<int>[2]);
+    expect(sessions[1].audio, <List<int>>[
+      <int>[2],
+    ]);
+
+    await controller.stopConversation();
+    controller.dispose();
+  });
+
+  test(
     'playback failure falls back to text and keeps queue operable',
     () async {
       final _FakePlayback playback = _FakePlayback(failNextEnqueue: true);
@@ -294,11 +407,12 @@ void main() {
     'a stale speaker connection cannot override the latest direction',
     () async {
       final Completer<void> speakerBGate = Completer<void>();
+      final _FakePlayback playback = _FakePlayback();
       final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
       final ConversationController controller = ConversationController(
         keyStore: _MemoryKeyStore('stored-key'),
         audioCapture: _FakeAudioCapture(),
-        playback: _FakePlayback(),
+        playback: playback,
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
               final _FakeLiveSession session = _FakeLiveSession(
@@ -319,6 +433,10 @@ void main() {
       await switchingBackToA;
       expect(controller.activeSpeaker, SpeakerSide.a);
       expect(controller.phase, ConversationPhase.listening);
+      expect(
+        playback.operations.where((value) => value == 'flush'),
+        hasLength(2),
+      );
 
       speakerBGate.complete();
       await switchingToB;
@@ -690,12 +808,16 @@ class _FakeAudioCapture implements AudioCaptureGateway {
 class _FakePlayback implements PcmPlaybackGateway {
   _FakePlayback({
     this.enqueueGate,
+    this.flushGate,
     this.failNextEnqueue = false,
+    this.failNextFlush = false,
     this.playbackMetrics = const PcmPlaybackMetrics.empty(),
   });
 
   final Completer<void>? enqueueGate;
+  final Completer<void>? flushGate;
   bool failNextEnqueue;
+  bool failNextFlush;
   final PcmPlaybackMetrics playbackMetrics;
   final List<List<int>> enqueued = <List<int>>[];
   final List<String> operations = <String>[];
@@ -718,7 +840,14 @@ class _FakePlayback implements PcmPlaybackGateway {
   }
 
   @override
-  Future<void> flush() async => operations.add('flush');
+  Future<void> flush() async {
+    operations.add('flush');
+    if (failNextFlush) {
+      failNextFlush = false;
+      throw StateError('flush failed');
+    }
+    await flushGate?.future;
+  }
 
   @override
   Future<PcmPlaybackMetrics> metrics() async => playbackMetrics;
