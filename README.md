@@ -2,7 +2,7 @@
 
 Android-first, cross-platform, ultra-low-latency, two-way speech translation for face-to-face travel conversations, powered by the Google Gemini Live API and `gemini-3.5-live-translate-preview`.
 
-> Status: Android-first `0.6.0` preview. The app, bounded native Android audio path, real Gemini speech/text/audio pipeline, interruption-safe speaker switching, translated-audio replay, system-audio interruption handling, and privacy-safe runtime diagnostics are runnable; physical-device acoustic and latency hardening remains before a production release.
+> Status: Android-first `0.7.0` preview. The app, bounded native Android audio path, real Gemini speech/text/audio pipeline, interruption-safe speaker switching, translated-audio replay, persisted language-pair preferences, typed offline/quota recovery states, system-audio interruption handling, and privacy-safe runtime diagnostics are runnable; physical-device acoustic and latency hardening remains before a production release.
 
 ## Product direction
 
@@ -69,7 +69,7 @@ Flutter is the accepted application framework. Android is the first implementati
 
 See the [Google Live Translation guide](https://ai.google.dev/gemini-api/docs/live-api/live-translate) for the current API contract.
 
-## Implemented through 0.6.0
+## Implemented through 0.7.0
 
 - Direct BYOK WebSocket connection to `gemini-3.5-live-translate-preview` with no application backend.
 - Source transcript, translated transcript, and translated 24 kHz PCM audio output.
@@ -78,6 +78,8 @@ See the [Google Live Translation guide](https://ai.google.dev/gemini-api/docs/li
   reset echo suppression, and reopen capture only after the new direction is
   ready, so users can actively interrupt a long translation.
 - More than 70 searchable target languages using the official BCP-47 list.
+- The last valid A/B language pair is restored across restarts and upgrades from
+  one non-sensitive local preference; conversation text and audio remain memory-only.
 - Standard conversation and face-to-face reading layouts, mute, history, and interruption-safe stop behavior.
 - Per-turn translated-audio replay from a memory-only bounded cache: 30 seconds
   maximum per turn, 8 MiB total, oldest-audio eviction without deleting text,
@@ -87,6 +89,9 @@ See the [Google Live Translation guide](https://ai.google.dev/gemini-api/docs/li
 - Memory-only key use by default and opt-in OS-backed secure storage.
 - Setup timeout, bounded reconnect, terminal/retryable error classification,
   session resumption, `goAway`, and redacted user errors.
+- Material status and recovery actions distinguish listening, translating,
+  reconnecting, offline, rate-limited, permission-denied, and failed states;
+  connecting/reconnecting can always be cancelled explicitly.
 - Lifecycle cancellation, stale-direction protection, bounded transcripts, and
   the latest 200 conversation turns retained in memory.
 - Redacted in-app diagnostics for first-output latency, capture/echo suppression,
@@ -114,13 +119,17 @@ Enter your own Google AI Studio key in the app. The key's project must be able t
 ## Validation status
 
 - `flutter analyze`: clean.
-- 42 automated protocol, session, PCM, transcript, controller, diagnostics, and
+- 50 automated protocol, preference, session, PCM, transcript, controller, diagnostics, and
   responsive widget tests: passing.
 - Real API smoke: 16 kHz speech input produced source text, translated text, and 24 kHz audio.
 - Android API 36 emulator: install, cold start, Key validation, microphone
   permission, start/stop, live session readiness, ten rapid A/B switches during
   translated-audio output, language search, mute, and both layouts exercised
   without application crashes or playback/session errors.
+- Android API 36 persistence/recovery: a Japanese/English pair survived force
+  stop and an in-place APK upgrade; an initial per-app network denial produced
+  an explicit retry action, while a 46-second active-session outage entered
+  offline-waiting and recovered automatically after networking returned.
 - Android API 36 audio-focus integration: active focus and speaker route
   observed; manual stop released focus/recording; clean restart succeeded; an
   external foreground service then took focus and the app stopped capture and

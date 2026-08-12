@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08-13
+
+### Added
+
+- Persist the last valid A/B language pair as one non-sensitive local preference
+  without storing transcript or audio content.
+- Added explicit translating, offline, and rate-limited conversation states with
+  Material status and recovery labels; connecting and automatic network waiting
+  remain explicitly cancellable.
+- Added typed Gemini failure categories for authentication, quota, offline,
+  configuration, service, and unknown failures.
+- Added preference corruption, language restore, typed protocol/state, initial
+  disconnect race, and responsive UI regression coverage.
+
+### Fixed
+
+- A connection Future that failed after emitting an offline event no longer
+  overwrites the actionable offline state with a generic failure.
+- Invalid, unsupported, or duplicate persisted language pairs now safely fall
+  back to Simplified Chinese and English.
+
 ## [0.6.0] - 2026-08-13
 
 ### Added
