@@ -2,9 +2,21 @@ import 'dart:async';
 
 import 'package:flutter/services.dart';
 
+enum MicrophonePermissionStatus { notDetermined, granted, denied }
+
+MicrophonePermissionStatus? microphonePermissionStatusFromWire(Object? value) {
+  return switch (value) {
+    'notDetermined' => MicrophonePermissionStatus.notDetermined,
+    'granted' => MicrophonePermissionStatus.granted,
+    'denied' => MicrophonePermissionStatus.denied,
+    _ => null,
+  };
+}
+
 abstract interface class MicrophonePermissionGateway {
-  Stream<bool> get changes;
-  Future<bool?> currentStatus();
+  Stream<MicrophonePermissionStatus> get changes;
+  Future<MicrophonePermissionStatus?> currentStatus();
+  Future<void> recordRequestResult({required bool granted});
   Future<void> openAppSettings();
 }
 
@@ -13,10 +25,14 @@ class DisabledMicrophonePermissionGateway
   const DisabledMicrophonePermissionGateway();
 
   @override
-  Stream<bool> get changes => const Stream<bool>.empty();
+  Stream<MicrophonePermissionStatus> get changes =>
+      const Stream<MicrophonePermissionStatus>.empty();
 
   @override
-  Future<bool?> currentStatus() async => null;
+  Future<MicrophonePermissionStatus?> currentStatus() async => null;
+
+  @override
+  Future<void> recordRequestResult({required bool granted}) async {}
 
   @override
   Future<void> openAppSettings() async {}
@@ -34,13 +50,23 @@ class PlatformMicrophonePermissionGateway
   );
 
   @override
-  Stream<bool> get changes => _events
+  Stream<MicrophonePermissionStatus> get changes => _events
       .receiveBroadcastStream()
-      .where((Object? value) => value is bool)
-      .cast<bool>();
+      .map(microphonePermissionStatusFromWire)
+      .where((MicrophonePermissionStatus? status) => status != null)
+      .cast<MicrophonePermissionStatus>();
 
   @override
-  Future<bool?> currentStatus() => _methods.invokeMethod<bool>('isGranted');
+  Future<MicrophonePermissionStatus?> currentStatus() async {
+    final Object? value = await _methods.invokeMethod<Object?>('status');
+    return microphonePermissionStatusFromWire(value);
+  }
+
+  @override
+  Future<void> recordRequestResult({required bool granted}) =>
+      _methods.invokeMethod<void>('recordRequestResult', <String, bool>{
+        'granted': granted,
+      });
 
   @override
   Future<void> openAppSettings() =>

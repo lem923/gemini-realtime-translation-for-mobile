@@ -29,14 +29,14 @@ class MainActivity : FlutterActivity() {
     private var audioEventSink: EventChannel.EventSink? = null
     private var permissionEventSink: EventChannel.EventSink? = null
     private val permissionHandler = Handler(Looper.getMainLooper())
-    private var lastPermissionState: Boolean? = null
+    private var lastPermissionState: String? = null
     private val permissionPoll = object : Runnable {
         override fun run() {
             if (permissionEventSink == null) return
-            val granted = isMicrophonePermissionGranted()
-            if (granted != lastPermissionState) {
-                lastPermissionState = granted
-                permissionEventSink?.success(granted)
+            val status = microphonePermissionStatus()
+            if (status != lastPermissionState) {
+                lastPermissionState = status
+                permissionEventSink?.success(status)
             }
             permissionHandler.postDelayed(this, PERMISSION_POLL_MILLISECONDS)
         }
@@ -81,7 +81,34 @@ class MainActivity : FlutterActivity() {
             "app.realtimetranslation/permissions",
         ).setMethodCallHandler { call, result ->
             when (call.method) {
-                "isGranted" -> result.success(isMicrophonePermissionGranted())
+                "status" -> result.success(microphonePermissionStatus())
+                "recordRequestResult" -> {
+                    val granted = call.argument<Boolean>("granted")
+                    if (granted == null) {
+                        result.error(
+                            "invalid_permission_result",
+                            "Permission result is missing",
+                            null,
+                        )
+                    } else {
+                        val preferences = getSharedPreferences(
+                            PERMISSION_PREFERENCES,
+                            Context.MODE_PRIVATE,
+                        )
+                        preferences.edit()
+                            .putBoolean(MICROPHONE_REQUEST_ANSWERED, true)
+                            .putBoolean(
+                                MICROPHONE_EVER_GRANTED,
+                                granted || preferences.getBoolean(
+                                    MICROPHONE_EVER_GRANTED,
+                                    false,
+                                ),
+                            )
+                            .apply()
+                        lastPermissionState = null
+                        result.success(null)
+                    }
+                }
                 "openAppSettings" -> {
                     val intent = Intent(
                         Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
@@ -140,12 +167,44 @@ class MainActivity : FlutterActivity() {
         super.onDestroy()
     }
 
-    private fun isMicrophonePermissionGranted(): Boolean =
-        checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
-            PackageManager.PERMISSION_GRANTED
+    private fun microphonePermissionStatus(): String {
+        if (
+            checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
+                PackageManager.PERMISSION_GRANTED
+        ) {
+            val preferences = getSharedPreferences(
+                PERMISSION_PREFERENCES,
+                Context.MODE_PRIVATE,
+            )
+            if (!preferences.getBoolean(MICROPHONE_EVER_GRANTED, false)) {
+                preferences.edit().putBoolean(MICROPHONE_EVER_GRANTED, true).apply()
+            }
+            return PERMISSION_GRANTED
+        }
+        val preferences = getSharedPreferences(
+            PERMISSION_PREFERENCES,
+            Context.MODE_PRIVATE,
+        )
+        val requestAnswered = preferences.getBoolean(
+            MICROPHONE_REQUEST_ANSWERED,
+            false,
+        )
+        val wasGranted = preferences.getBoolean(MICROPHONE_EVER_GRANTED, false)
+        return if (requestAnswered || wasGranted) {
+            PERMISSION_DENIED
+        } else {
+            PERMISSION_NOT_DETERMINED
+        }
+    }
 
     private companion object {
         const val PERMISSION_POLL_MILLISECONDS = 750L
+        const val PERMISSION_PREFERENCES = "permission_state"
+        const val MICROPHONE_REQUEST_ANSWERED = "microphone_request_answered"
+        const val MICROPHONE_EVER_GRANTED = "microphone_ever_granted"
+        const val PERMISSION_NOT_DETERMINED = "notDetermined"
+        const val PERMISSION_GRANTED = "granted"
+        const val PERMISSION_DENIED = "denied"
     }
 }
 

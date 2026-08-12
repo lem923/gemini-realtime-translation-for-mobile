@@ -65,7 +65,7 @@ class ConversationController extends ChangeNotifier {
 
   StreamSubscription<Uint8List>? _captureSubscription;
   StreamSubscription<PcmPlaybackEvent>? _playbackEventSubscription;
-  StreamSubscription<bool>? _permissionSubscription;
+  StreamSubscription<MicrophonePermissionStatus>? _permissionSubscription;
   Future<void> _playbackChain = Future<void>.value();
   Future<void>? _stopOperation;
   Future<void>? _replayOperation;
@@ -203,15 +203,16 @@ class ConversationController extends ChangeNotifier {
     if (stored != null && stored.trim().isNotEmpty) {
       _apiKey = stored.trim();
       _rememberKey = true;
-      bool? currentPermission;
+      MicrophonePermissionStatus? currentPermission;
       try {
         currentPermission = await _permissionGateway.currentStatus();
       } catch (_) {
         // Permission status is advisory at startup. The explicit start action
         // remains responsible for requesting access when status is unknown.
       }
-      _microphonePermissionGrantedOnce = currentPermission == true;
-      if (currentPermission == false) {
+      _microphonePermissionGrantedOnce =
+          currentPermission == MicrophonePermissionStatus.granted;
+      if (currentPermission == MicrophonePermissionStatus.denied) {
         _phase = ConversationPhase.permissionDenied;
         _errorMessage = '需要麦克风权限才能进行语音翻译';
       } else {
@@ -299,7 +300,16 @@ class ConversationController extends ChangeNotifier {
     final int generation = ++_conversationGeneration;
     notifyListeners();
     try {
-      if (!await _audioCapture.hasPermission()) {
+      final bool permissionGranted = await _audioCapture.hasPermission();
+      try {
+        await _permissionGateway.recordRequestResult(
+          granted: permissionGranted,
+        );
+      } catch (_) {
+        // The capture result remains authoritative. Persisting permission
+        // history only improves the next cold-start recovery state.
+      }
+      if (!permissionGranted) {
         if (!_isCurrentConversation(generation)) {
           return;
         }
@@ -359,11 +369,11 @@ class ConversationController extends ChangeNotifier {
     }
   }
 
-  void _handleMicrophonePermissionChanged(bool granted) {
+  void _handleMicrophonePermissionChanged(MicrophonePermissionStatus status) {
     if (_disposed) {
       return;
     }
-    if (granted) {
+    if (status == MicrophonePermissionStatus.granted) {
       _microphonePermissionGrantedOnce = true;
       if (_phase == ConversationPhase.permissionDenied &&
           _stopOperation == null) {
@@ -375,8 +385,25 @@ class ConversationController extends ChangeNotifier {
       }
       return;
     }
-    if (!_microphonePermissionGrantedOnce &&
-        _phase != ConversationPhase.permissionDenied) {
+    if (status == MicrophonePermissionStatus.notDetermined &&
+        !_microphonePermissionGrantedOnce) {
+      if (_phase == ConversationPhase.permissionDenied &&
+          _stopOperation == null) {
+        _phase = hasApiKey
+            ? ConversationPhase.idle
+            : ConversationPhase.needsKey;
+        _errorMessage = null;
+        notifyListeners();
+      }
+      return;
+    }
+    if (!_microphonePermissionGrantedOnce && _captureSubscription == null) {
+      if (_phase != ConversationPhase.needsKey &&
+          _phase != ConversationPhase.permissionDenied) {
+        _phase = ConversationPhase.permissionDenied;
+        _errorMessage = '需要麦克风权限才能进行语音翻译';
+        notifyListeners();
+      }
       return;
     }
     _microphonePermissionGrantedOnce = false;
@@ -400,9 +427,10 @@ class ConversationController extends ChangeNotifier {
       return;
     }
     try {
-      final bool? granted = await _permissionGateway.currentStatus();
-      if (granted != null) {
-        _handleMicrophonePermissionChanged(granted);
+      final MicrophonePermissionStatus? status = await _permissionGateway
+          .currentStatus();
+      if (status != null) {
+        _handleMicrophonePermissionChanged(status);
       }
     } catch (_) {
       // The native permission event remains authoritative. A lifecycle probe
