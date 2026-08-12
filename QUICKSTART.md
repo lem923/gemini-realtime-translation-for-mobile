@@ -37,6 +37,11 @@ flutter run
 
 In the app, set language A and B, enter your own API key, leave “remember” off unless local persistence is desired, then tap **开始翻译**. Tap A or B whenever the person speaking changes.
 
+For device hardening, open **API Key 与隐私 → 查看运行诊断** after a
+conversation. The selectable/copyable report contains only timing and counters:
+it intentionally excludes the API key, audio payloads, source transcript, and
+translated transcript.
+
 Build a local debug APK:
 
 ```bash

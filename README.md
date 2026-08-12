@@ -2,7 +2,7 @@
 
 Android-first, cross-platform, ultra-low-latency, two-way speech translation for face-to-face travel conversations, powered by the Google Gemini Live API and `gemini-3.5-live-translate-preview`.
 
-> Status: Android-first `0.2.0` preview. The app, bounded native Android audio path, and real Gemini speech/text/audio pipeline are runnable; physical-device acoustic and latency hardening remains before a production release.
+> Status: Android-first `0.3.0` preview. The app, bounded native Android audio path, real Gemini speech/text/audio pipeline, and privacy-safe runtime diagnostics are runnable; physical-device acoustic and latency hardening remains before a production release.
 
 ## Product direction
 
@@ -69,7 +69,7 @@ Flutter is the accepted application framework. Android is the first implementati
 
 See the [Google Live Translation guide](https://ai.google.dev/gemini-api/docs/live-api/live-translate) for the current API contract.
 
-## Implemented through 0.2.0
+## Implemented through 0.3.0
 
 - Direct BYOK WebSocket connection to `gemini-3.5-live-translate-preview` with no application backend.
 - Source transcript, translated transcript, and translated 24 kHz PCM audio output.
@@ -83,6 +83,11 @@ See the [Google Live Translation guide](https://ai.google.dev/gemini-api/docs/li
   session resumption, `goAway`, and redacted user errors.
 - Lifecycle cancellation, stale-direction protection, bounded transcripts, and
   the latest 200 conversation turns retained in memory.
+- Redacted in-app diagnostics for first-output latency, capture/echo suppression,
+  reconnect/failure counts, direction switches, completed turns, and native
+  playback queue depth/drops. Reports contain no key, audio, or transcript text.
+- Terminal session/audio failures automatically release capture, both warm
+  sessions, and playback before the user can retry.
 
 ## Quick start
 
@@ -98,7 +103,8 @@ Enter your own Google AI Studio key in the app. The key's project must be able t
 ## Validation status
 
 - `flutter analyze`: clean.
-- Automated protocol, PCM, transcript, controller, and responsive widget tests: passing.
+- 32 automated protocol, session, PCM, transcript, controller, diagnostics, and
+  responsive widget tests: passing.
 - Real API smoke: 16 kHz speech input produced source text, translated text, and 24 kHz audio.
 - Android API 36 emulator: install, cold start, Key validation, microphone permission, start/stop, live session readiness, A/B switching, language search, mute, and both layouts exercised without crashes.
 - The preview APK is signed with a dedicated external release key and verified

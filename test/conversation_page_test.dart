@@ -77,6 +77,40 @@ void main() {
       isTrue,
     );
   });
+
+  testWidgets('shows a redacted Material diagnostics report', (
+    WidgetTester tester,
+  ) async {
+    final ConversationController controller = ConversationController(
+      keyStore: _StoredKeyStore(),
+      audioCapture: _NoopAudioCapture(),
+      playback: _NoopPlayback(),
+      sessionFactory:
+          ({required String apiKey, required String targetLanguageCode}) =>
+              _NoopLiveSession(),
+    );
+    await controller.initialize();
+    await tester.pumpWidget(
+      MaterialApp(home: ConversationPage(controller: controller)),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('API Key 与隐私'));
+    await tester.pumpAndSettle();
+    final Finder diagnosticsButton = find.text('查看运行诊断');
+    await tester.ensureVisible(diagnosticsButton);
+    await tester.tap(diagnosticsButton);
+    await tester.pumpAndSettle();
+
+    expect(find.text('运行诊断'), findsOneWidget);
+    expect(find.textContaining('不含 Key、音频或对话内容'), findsOneWidget);
+    expect(find.text('复制'), findsOneWidget);
+    expect(find.text('关闭'), findsOneWidget);
+
+    await tester.tap(find.text('关闭'));
+    await tester.pumpAndSettle();
+    controller.dispose();
+  });
 }
 
 class _StoredKeyStore implements ApiKeyStore {
@@ -116,6 +150,10 @@ class _NoopPlayback implements PcmPlaybackGateway {
 
   @override
   Future<void> flush() async {}
+
+  @override
+  Future<PcmPlaybackMetrics> metrics() async =>
+      const PcmPlaybackMetrics.empty();
 }
 
 class _NoopLiveSession implements LiveTranslationSession {

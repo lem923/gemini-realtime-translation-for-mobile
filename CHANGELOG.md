@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-13
+
+### Added
+
+- Added a local, redacted runtime diagnostics report for first source text,
+  first translated text, first translated audio, microphone sends, echo-guard
+  suppression, direction switches, reconnects, failures, and completed turns.
+- Added Android native playback queue depth, queue ceiling, and dropped-chunk
+  metrics to the shared platform contract.
+- Added a Material 3 diagnostics dialog with selective text and clipboard export;
+  the report never contains API keys, audio payloads, or transcript content.
+- Added deterministic setup-disconnect, diagnostic privacy, native-metric,
+  terminal-resource-release, microphone-failure, and UI tests.
+
+### Fixed
+
+- Terminal Gemini, microphone-stream, microphone-startup, and speaker-switch
+  failures now release capture, both warm sessions, and playback before retry.
+- A WebSocket close during the setup-ready race no longer leaks an unhandled
+  asynchronous `Completer` error into the Flutter runtime log.
+
 ## [0.2.0] - 2026-08-13
 
 ### Added

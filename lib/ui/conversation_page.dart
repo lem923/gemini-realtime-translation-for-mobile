@@ -2,8 +2,10 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../conversation/conversation_controller.dart';
+import '../conversation/conversation_diagnostics.dart';
 import '../conversation/conversation_models.dart';
 import '../shared/translation_language.dart';
 
@@ -1078,6 +1080,18 @@ class _ApiKeySheetState extends State<_ApiKeySheet> {
             const SizedBox(height: 18),
             SizedBox(
               width: double.infinity,
+              height: 50,
+              child: OutlinedButton.icon(
+                onPressed: _saving
+                    ? null
+                    : () => _showDiagnosticsDialog(context, widget.controller),
+                icon: const Icon(Icons.monitor_heart_outlined),
+                label: const Text('查看运行诊断'),
+              ),
+            ),
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
               height: 54,
               child: FilledButton.icon(
                 onPressed: _saving ? null : _save,
@@ -1124,4 +1138,56 @@ class _ApiKeySheetState extends State<_ApiKeySheet> {
       Navigator.pop(context);
     }
   }
+}
+
+Future<void> _showDiagnosticsDialog(
+  BuildContext context,
+  ConversationController controller,
+) async {
+  final ConversationDiagnostics diagnostics = await controller
+      .collectDiagnostics();
+  if (!context.mounted) {
+    return;
+  }
+  final String report = diagnostics.toRedactedText();
+  await showDialog<void>(
+    context: context,
+    builder: (BuildContext dialogContext) => AlertDialog(
+      icon: const Icon(Icons.monitor_heart_outlined),
+      title: const Text('运行诊断'),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 520, maxHeight: 520),
+        child: SingleChildScrollView(
+          child: SelectableText(
+            report,
+            style: Theme.of(dialogContext).textTheme.bodySmall?.copyWith(
+              fontFamily: 'monospace',
+              height: 1.55,
+            ),
+          ),
+        ),
+      ),
+      actions: <Widget>[
+        TextButton(
+          onPressed: () => Navigator.pop(dialogContext),
+          child: const Text('关闭'),
+        ),
+        FilledButton.icon(
+          onPressed: () async {
+            await Clipboard.setData(ClipboardData(text: report));
+            if (dialogContext.mounted) {
+              Navigator.pop(dialogContext);
+            }
+            if (context.mounted) {
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(const SnackBar(content: Text('已复制脱敏诊断信息')));
+            }
+          },
+          icon: const Icon(Icons.copy_rounded),
+          label: const Text('复制'),
+        ),
+      ],
+    ),
+  );
 }
