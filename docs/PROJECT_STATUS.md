@@ -4,7 +4,7 @@
 
 `gemini-realtime-translation-for-mobile` 是一个 Android 优先、面向出国旅行双人对话的实时翻译器。应用使用 Flutter 复用产品、协议和状态管理代码，通过 Google Gemini Live API 的 `gemini-3.5-live-translate-preview` 模型同时输出原文、译文和翻译语音。
 
-当前 `0.20.0` 处于开发中：`0.19.0` 已发布为 Android 预发布候选，正在处理真机反馈并继续声学与路由硬化。Android 是第一个交付平台；iOS 将在 Android 真机验证和体验目标稳定后补齐原生适配。
+`0.20.0` 已作为 Android 预发布发布（GitHub Releases，签名 APK）。Android 是第一个交付平台；iOS 将在 Android 真机验证和体验目标稳定后补齐原生适配。
 
 ## 已完成
 
@@ -75,4 +75,4 @@
 
 ## 下一步
 
-`0.19.0` 作为 Android 预发布候选提供给测试者；当前唯一产品主线仍是完成 Android 真机矩阵和量化验收，处理发现的问题（包括真机上的会话保持与翻译时延反馈），再决定何时发布稳定 Android 版本。随后才进入 iOS 原生适配与同等场景验证。具体执行顺序见 [Roadmap](roadmap.md)，本地运行与构建方式见 [Quickstart](../QUICKSTART.md)。
+`0.20.0` 已发布为 Android 预发布，修复了真机反馈的会话断开、翻译时延和讲话人卡片误触问题；当前唯一产品主线仍是完成 Android 真机矩阵和量化验收，再决定何时发布稳定 Android 版本。随后才进入 iOS 原生适配与同等场景验证。具体执行顺序见 [Roadmap](roadmap.md)，本地运行与构建方式见 [Quickstart](../QUICKSTART.md)。

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-08-13
+
 ### Changed
 
 - Streaming now keeps its Gemini sessions and microphone across audio-focus
@@ -20,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Live setup now requests a 500 ms server-side silence window
   (`automaticActivityDetection.silenceDurationMs`) so turns finalize sooner
   after speech stops.
+- Speaker cards now separate their tap zones: the card body selects the
+  speaker while the language name sits in a visually distinct pill that opens
+  the language picker, with its own tooltip and accessibility label.
 
 ### Fixed
 
@@ -29,11 +34,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Tests
 
-- 109 Flutter tests pass; Android host tests and lint pass. A mock-server
-  emulator matrix verified session persistence, direction-switch turn
-  boundaries, goAway resumption, and 1001-close reconnects; a real Gemini run
-  validated the new setup fields, a stable 60-second session, usage metadata,
-  and translated audio.
+- 110 Flutter tests pass; Android host tests and lint pass; GitHub Actions CI
+  is green. A mock-server emulator matrix verified session persistence,
+  direction-switch turn boundaries, goAway resumption, and 1001-close
+  reconnects; a real Gemini run validated the new setup fields, stable
+  60-second sessions, usage metadata, and translated audio. The signed
+  release APK passed signature, alignment, and secret scans and clean-installed
+  plus upgraded on Android API 26 and API 36 emulators with a real-Gemini
+  session on API 36.
 
 ## [0.19.0] - 2026-08-13
 
