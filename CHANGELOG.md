@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-08-13
+
+### Changed
+
+- The microphone path now applies an energy-based speech gate with adaptive
+  noise floor and hysteresis. Ambient silence and noise are held locally
+  instead of being sent to Gemini, and each utterance end sends
+  `audioStreamEnd` so the server finalizes the turn promptly. This stops the
+  server from continuously translating background noise, which previously kept
+  translated playback running and starved later sentences.
+
+### Added
+
+- Diagnostics now report held silence chunks and detected utterances alongside
+  sent and suppressed counters.
+
+### Tests
+
+- 116 Flutter tests pass, including speech-gate, utterance-finalization, and
+  noise-floor regression suites; Android host tests and lint pass. On-device
+  mock and real-Gemini runs confirmed silence is held with zero transport
+  chunks and the session stays healthy.
+
 ## [0.20.0] - 2026-08-13
 
 ### Changed

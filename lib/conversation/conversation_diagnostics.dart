@@ -10,6 +10,8 @@ class ConversationDiagnostics {
     required this.sessionDurationMilliseconds,
     required this.microphoneChunksSent,
     required this.microphoneChunksSuppressed,
+    required this.microphoneChunksHeld,
+    required this.utterancesDetected,
     required this.outputAudioChunks,
     required this.outputAudioBytes,
     required this.completedTurns,
@@ -36,6 +38,8 @@ class ConversationDiagnostics {
   final int sessionDurationMilliseconds;
   final int microphoneChunksSent;
   final int microphoneChunksSuppressed;
+  final int microphoneChunksHeld;
+  final int utterancesDetected;
   final int outputAudioChunks;
   final int outputAudioBytes;
   final int completedTurns;
@@ -65,6 +69,8 @@ class ConversationDiagnostics {
       '会话时长: $sessionDurationMilliseconds ms',
       '麦克风已发送块: $microphoneChunksSent',
       '回声保护丢弃块: $microphoneChunksSuppressed',
+      '静音停发块: $microphoneChunksHeld',
+      '检测到发言: $utterancesDetected',
       '译音块 / 字节: $outputAudioChunks / $outputAudioBytes',
       '完成轮次: $completedTurns',
       '方向切换: $directionSwitches',

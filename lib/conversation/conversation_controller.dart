@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import '../audio/audio_capture_gateway.dart';
 import '../audio/audio_constants.dart';
 import '../audio/pcm_playback_gateway.dart';
+import '../audio/speech_activity_detector.dart';
 import '../live_translate/live_event.dart';
 import '../live_translate/live_translation_session.dart';
 import '../permissions/microphone_permission_gateway.dart';
@@ -55,6 +56,7 @@ class ConversationController extends ChangeNotifier {
   final Duration cleanupTimeout;
   final Map<SpeakerSide, LiveTranslationSession> _sessions =
       <SpeakerSide, LiveTranslationSession>{};
+  SpeechActivityDetector _speechDetector = SpeechActivityDetector();
   final Map<SpeakerSide, StreamSubscription<LiveEvent>> _sessionSubscriptions =
       <SpeakerSide, StreamSubscription<LiveEvent>>{};
   final Map<SpeakerSide, TranscriptAccumulator> _sourceTranscripts =
@@ -110,6 +112,8 @@ class ConversationController extends ChangeNotifier {
   int? _firstTranslatedAudioMilliseconds;
   int _microphoneChunksSent = 0;
   int _microphoneChunksSuppressed = 0;
+  int _microphoneChunksHeld = 0;
+  int _utterancesDetected = 0;
   int _outputAudioChunks = 0;
   int _outputAudioBytes = 0;
   int _diagnosticCompletedTurns = 0;
@@ -384,6 +388,7 @@ class ConversationController extends ChangeNotifier {
     _resetDiagnostics(_monotonicMicros());
     final int generation = ++_conversationGeneration;
     _captureRecoveryAttempts = 0;
+    _speechDetector = SpeechActivityDetector();
     notifyListeners();
     try {
       final bool permissionGranted = await _audioCapture.hasPermission();
@@ -620,18 +625,34 @@ class ConversationController extends ChangeNotifier {
       return;
     }
     final LiveTranslationSession? session = _sessions[_activeSpeaker];
-    if (session?.isReady == true) {
-      final int now = _monotonicMicros();
-      try {
-        session!.sendAudio(chunk);
-        _firstMicrophoneSentMicros ??= now;
-        _firstMicrophoneSentMilliseconds ??= _elapsedDiagnosticMillisecondsAt(
-          now,
-        );
-        _microphoneChunksSent += 1;
-      } catch (_) {
-        _terminateConversation('连接已中断，请检查网络后重试');
-      }
+    if (session?.isReady != true) {
+      return;
+    }
+    final SpeechGateDecision decision = _speechDetector.add(chunk);
+    switch (decision) {
+      case SpeechGateDecision.hold:
+        _microphoneChunksHeld += 1;
+      case SpeechGateDecision.finalize:
+        _microphoneChunksHeld += 1;
+        _utterancesDetected += 1;
+        try {
+          session!.endAudioStream();
+        } catch (_) {
+          // A broken transport must not prevent the next utterance; the
+          // session state machine reports and reconnects on its own.
+        }
+      case SpeechGateDecision.forward:
+        final int now = _monotonicMicros();
+        try {
+          session!.sendAudio(chunk);
+          _firstMicrophoneSentMicros ??= now;
+          _firstMicrophoneSentMilliseconds ??= _elapsedDiagnosticMillisecondsAt(
+            now,
+          );
+          _microphoneChunksSent += 1;
+        } catch (_) {
+          _terminateConversation('连接已中断，请检查网络后重试');
+        }
     }
   }
 
@@ -1736,6 +1757,8 @@ class ConversationController extends ChangeNotifier {
       sessionDurationMilliseconds: durationMilliseconds,
       microphoneChunksSent: _microphoneChunksSent,
       microphoneChunksSuppressed: _microphoneChunksSuppressed,
+      microphoneChunksHeld: _microphoneChunksHeld,
+      utterancesDetected: _utterancesDetected,
       outputAudioChunks: _outputAudioChunks,
       outputAudioBytes: _outputAudioBytes,
       completedTurns: _diagnosticCompletedTurns,
@@ -1772,6 +1795,8 @@ class ConversationController extends ChangeNotifier {
     _firstTranslatedAudioMilliseconds = null;
     _microphoneChunksSent = 0;
     _microphoneChunksSuppressed = 0;
+    _microphoneChunksHeld = 0;
+    _utterancesDetected = 0;
     _outputAudioChunks = 0;
     _outputAudioBytes = 0;
     _diagnosticCompletedTurns = 0;
