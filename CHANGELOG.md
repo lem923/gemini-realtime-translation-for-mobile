@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-08-13
+
 ### Added
 
 - Added an original Android/iOS launcher icon and branded launch artwork built
@@ -44,7 +46,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Tests
 
 - Passed all 108 Flutter tests at 89.1% line coverage, 17 Android host tests,
-  Flutter analysis, Android lint, formatting, and a branded debug APK build.
+  Flutter analysis, Android lint, formatting, and a branded signed release APK
+  build.
+- Verified the signed release APK on clean Android API 26 and API 36 emulator
+  installs, including cold start, portrait/landscape layouts, face-to-face mode,
+  and the API Key/privacy flow without crashes or layout errors.
+- Passed a real two-turn Chinese/English Gemini dialogue with one manual
+  direction switch, source and translated text, 204,000 bytes of translated
+  audio, zero failures, and zero reconnects.
 
 ## [0.18.0] - 2026-08-13
 

@@ -1,6 +1,6 @@
 # Roadmap
 
-> 最后更新：2026-08-13。当前阶段：Android 发布前真机硬化。
+> 最后更新：2026-08-13。`0.19.0` Android 预发布候选已完成签名包、API 26/36 与真实 Gemini 双向验证；当前阶段：Android 真机与声学硬化。
 
 本路线图按可验证的退出门槛推进。功能进入代码、通过模拟器或完成一次 API 冒烟测试，都不自动等于该阶段已经完成。现状总览见 [Project Status](PROJECT_STATUS.md)。
 
@@ -12,7 +12,7 @@
 - 将 Gemini 协议、会话状态、语言/方向、转写、回放、权限与诊断放在可跨平台复用的 Dart 层。
 - 完成 Android 16 kHz 录音、24 kHz 播放、通信路由/焦点，以及 API Key、权限与本地偏好的平台接入。
 
-已达到的工程门槛：核心双向流程可运行；格式、静态分析、Flutter 测试、Android 单测/lint 和 debug APK 构建已纳入 CI。
+已达到的工程门槛：核心双向流程可运行；格式、静态分析、Flutter 测试、Android 单测/lint 和 debug APK 构建已纳入 CI，`0.19.0` 签名 release APK 已在 API 26/36 模拟器完成安装与启动验证。
 
 ## 已完成：Android 双向 MVP
 

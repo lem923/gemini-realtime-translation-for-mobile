@@ -2,7 +2,7 @@
 
 Android-first, cross-platform, ultra-low-latency, two-way speech translation for face-to-face travel conversations, powered by the Google Gemini Live API and `gemini-3.5-live-translate-preview`.
 
-> Status: Android-first `0.19.0` development preview. The core app and real Gemini speech/text/audio pipeline are runnable; representative physical-device acoustic and latency hardening remains before a production release. See the public [project status](docs/PROJECT_STATUS.md) and [roadmap](docs/roadmap.md) for verified evidence and remaining gates.
+> Status: Android-first `0.19.0` prerelease preview. The signed APK and real Gemini speech/text/audio pipeline are runnable; representative physical-device acoustic and latency hardening remains before a production release. See the public [project status](docs/PROJECT_STATUS.md) and [roadmap](docs/roadmap.md) for verified evidence and remaining gates.
 
 ## Product direction
 
