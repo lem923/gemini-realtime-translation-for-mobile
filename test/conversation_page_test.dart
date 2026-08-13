@@ -58,6 +58,41 @@ void main() {
     controller.dispose();
   });
 
+  testWidgets('speaker card body selects speaker, pill opens language picker', (
+    WidgetTester tester,
+  ) async {
+    final ConversationController controller = ConversationController(
+      keyStore: _StoredKeyStore(),
+      audioCapture: _NoopAudioCapture(),
+      playback: _NoopPlayback(),
+      sessionFactory:
+          ({required String apiKey, required String targetLanguageCode}) =>
+              _NoopLiveSession(),
+    );
+    await controller.initialize();
+
+    await tester.pumpWidget(
+      MaterialApp(home: ConversationPage(controller: controller)),
+    );
+    await tester.pumpAndSettle();
+    expect(controller.activeSpeaker, SpeakerSide.a);
+
+    final Size pillSize = tester.getSize(
+      find.bySemanticsLabel(RegExp('更换语言 English')),
+    );
+    expect(pillSize.height, greaterThanOrEqualTo(48));
+
+    await tester.tap(find.bySemanticsLabel(RegExp('讲话人 B')));
+    await tester.pumpAndSettle();
+    expect(controller.activeSpeaker, SpeakerSide.b);
+
+    await tester.tap(find.text('简体中文'));
+    await tester.pumpAndSettle();
+    expect(find.byType(TextField), findsOneWidget);
+
+    controller.dispose();
+  });
+
   testWidgets('shows connecting state in face-to-face mode', (
     WidgetTester tester,
   ) async {

@@ -439,75 +439,115 @@ class _SpeakerCard extends StatelessWidget {
     final Color accent = side == SpeakerSide.a
         ? colors.primary
         : colors.tertiary;
-    return Semantics(
-      selected: selected,
-      button: true,
-      label: '${side == SpeakerSide.a ? '讲话人 A' : '讲话人 B'} ${language.name}',
-      child: InkWell(
-        onTap: onSelect,
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 180),
+      decoration: BoxDecoration(
+        color: selected
+            ? accent.withValues(alpha: 0.12)
+            : colors.surfaceContainerLow,
         borderRadius: BorderRadius.circular(22),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 180),
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: selected
-                ? accent.withValues(alpha: 0.12)
-                : colors.surfaceContainerLow,
-            borderRadius: BorderRadius.circular(22),
-            border: Border.all(
-              color: selected ? accent : colors.outlineVariant,
-              width: selected ? 2 : 1,
-            ),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Row(
-                children: <Widget>[
-                  Icon(
-                    selected ? Icons.mic_rounded : Icons.person_outline_rounded,
-                    color: accent,
-                    size: 20,
-                  ),
-                  const Spacer(),
-                  Text(
-                    side == SpeakerSide.a ? 'A' : 'B',
-                    style: TextStyle(
-                      color: accent,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              Text(language.flag, style: const TextStyle(fontSize: 24)),
-              const SizedBox(height: 5),
-              InkWell(
-                onTap: onLanguage,
-                borderRadius: BorderRadius.circular(8),
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(minHeight: 48),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 3),
-                    child: Row(
+        border: Border.all(
+          color: selected ? accent : colors.outlineVariant,
+          width: selected ? 2 : 1,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Semantics(
+            selected: selected,
+            button: true,
+            onTap: onSelect,
+            label:
+                '${side == SpeakerSide.a ? '讲话人 A' : '讲话人 B'} '
+                '${language.name}',
+            excludeSemantics: true,
+            child: InkWell(
+              onTap: onSelect,
+              borderRadius: BorderRadius.circular(22),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(14, 14, 14, 9),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Row(
                       children: <Widget>[
-                        Expanded(
-                          child: Text(
-                            language.name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontWeight: FontWeight.w700),
+                        Icon(
+                          selected
+                              ? Icons.mic_rounded
+                              : Icons.person_outline_rounded,
+                          color: accent,
+                          size: 20,
+                        ),
+                        const Spacer(),
+                        Text(
+                          side == SpeakerSide.a ? 'A' : 'B',
+                          style: TextStyle(
+                            color: accent,
+                            fontWeight: FontWeight.w800,
                           ),
                         ),
-                        const Icon(Icons.expand_more_rounded, size: 18),
                       ],
+                    ),
+                    const SizedBox(height: 12),
+                    Text(language.flag, style: const TextStyle(fontSize: 24)),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+            child: Tooltip(
+              message: '更换语言',
+              child: Semantics(
+                button: true,
+                onTap: onLanguage,
+                label: '更换语言 ${language.name}',
+                excludeSemantics: true,
+                child: InkWell(
+                  onTap: onLanguage,
+                  borderRadius: BorderRadius.circular(10),
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(minHeight: 48),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 3,
+                      ),
+                      decoration: BoxDecoration(
+                        color: colors.surfaceContainerHigh.withValues(
+                          alpha: 0.55,
+                        ),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: colors.outlineVariant,
+                          width: 1,
+                        ),
+                      ),
+                      child: Row(
+                        children: <Widget>[
+                          Expanded(
+                            child: Text(
+                              language.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          const Icon(Icons.expand_more_rounded, size: 18),
+                        ],
+                      ),
                     ),
                   ),
                 ),
               ),
-            ],
+            ),
           ),
-        ),
+        ],
       ),
     );
   }
