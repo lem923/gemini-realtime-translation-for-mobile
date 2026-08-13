@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-08-13
+
+### Fixed
+
+- Isolated microphone startup ownership by capture generation so a cancelled
+  startup can no longer time out later and stop a newer, healthy recording.
+- Made stop actively cancel a pending first-PCM health check instead of waiting
+  for its startup timeout, while ignoring stale native audio callbacks.
+
+### Tests
+
+- Added deterministic regressions proving pending startup cancellation is
+  immediate and a cancelled startup cannot stop the next capture.
+- Passed all 72 Flutter tests at 86.1% line coverage, six Android host tests,
+  Flutter analysis, Android lint, formatting, and debug APK compilation.
+- On Android API 36, cancelled a real Gemini connection, restarted it, observed
+  stable translation plus simultaneous 16 kHz communication capture and 24 kHz
+  translated playback, then verified complete resource release. API 26 retained
+  the actionable fail-closed behavior for its broken legacy microphone HAL.
+
 ## [0.15.0] - 2026-08-13
 
 ### Fixed

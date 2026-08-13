@@ -2,7 +2,7 @@
 
 Android-first, cross-platform, ultra-low-latency, two-way speech translation for face-to-face travel conversations, powered by the Google Gemini Live API and `gemini-3.5-live-translate-preview`.
 
-> Status: Android-first `0.15.0` preview. The app, health-checked native Android communication capture/playback path, external-device-aware routing, real Gemini speech/text/audio pipeline, listener-facing face-to-face translation, interruption-safe speaker switching, translated-audio replay, persisted language-pair preferences, typed offline/quota/permission recovery states, explicit audio-stream boundaries, long-session context compression, system-audio interruption handling, and privacy-safe runtime diagnostics are runnable; physical-device acoustic and latency hardening remains before a production release.
+> Status: Android-first `0.16.0` preview. The app, generation-isolated and health-checked native Android communication capture/playback path, external-device-aware routing, real Gemini speech/text/audio pipeline, listener-facing face-to-face translation, interruption-safe speaker switching, translated-audio replay, persisted language-pair preferences, typed offline/quota/permission recovery states, explicit audio-stream boundaries, long-session context compression, system-audio interruption handling, and privacy-safe runtime diagnostics are runnable; physical-device acoustic and latency hardening remains before a production release.
 
 ## Product direction
 
@@ -70,7 +70,7 @@ Flutter is the accepted application framework. Android is the first implementati
 
 See the [Google Live Translation guide](https://ai.google.dev/gemini-api/docs/live-api/live-translate) for the current API contract.
 
-## Implemented through 0.15.0
+## Implemented through 0.16.0
 
 - Direct BYOK WebSocket connection to `gemini-3.5-live-translate-preview` with no application backend.
 - Source transcript, translated transcript, and translated 24 kHz PCM audio output.
@@ -148,7 +148,7 @@ Enter your own Google AI Studio key in the app. The key's project must be able t
 ## Validation status
 
 - `flutter analyze`: clean.
-- 70 automated protocol, preference, permission, session, PCM, transcript, capture-contract, controller, diagnostics, and
+- 72 automated protocol, preference, permission, session, PCM, transcript, capture-contract, controller, diagnostics, and
   responsive widget tests: passing.
 - 6 Android host-layer route-policy tests and Android lint: passing. CI runs
   both the shared Flutter suite and the app-scoped Kotlin/lint gate.
@@ -170,6 +170,10 @@ Enter your own Google AI Studio key in the app. The key's project must be able t
   permission, start/stop, live session readiness, ten rapid A/B switches during
   translated-audio output, language search, mute, and both layouts exercised
   without application crashes or playback/session errors.
+- Android API 36 rapid restart: a real Gemini connection was cancelled and
+  restarted; the replacement remained active beyond the prior capture-startup
+  timeout while 16 kHz communication capture and 24 kHz translated playback
+  stayed live, then manual stop released recording, focus, mode, and route.
 - Android API 36 persistence/recovery: a Japanese/English pair survived force
   stop and an in-place APK upgrade; an initial per-app network denial produced
   an explicit retry action, while a 46-second active-session outage entered
