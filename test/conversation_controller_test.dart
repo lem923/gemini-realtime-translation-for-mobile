@@ -1015,6 +1015,40 @@ void main() {
     controller.dispose();
   });
 
+  test('one session close failure cannot abort remaining cleanup', () async {
+    final _FakeAudioCapture capture = _FakeAudioCapture();
+    final _FakePlayback playback = _FakePlayback();
+    final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
+    final ConversationController controller = ConversationController(
+      keyStore: _MemoryKeyStore('stored-key'),
+      audioCapture: capture,
+      playback: playback,
+      sessionFactory:
+          ({required String apiKey, required String targetLanguageCode}) {
+            final _FakeLiveSession session = _FakeLiveSession(
+              closeError: sessions.isEmpty
+                  ? StateError('socket close failed')
+                  : null,
+            );
+            sessions.add(session);
+            return session;
+          },
+    );
+
+    await controller.initialize();
+    await controller.startConversation();
+    await _flushEvents();
+    expect(sessions, hasLength(2));
+
+    await controller.stopConversation();
+
+    expect(sessions.every((session) => session.closeCount == 1), isTrue);
+    expect(capture.stopped, isTrue);
+    expect(playback.operations, containsAll(<String>['flush', 'dispose']));
+    expect(controller.phase, ConversationPhase.idle);
+    controller.dispose();
+  });
+
   test(
     'a stale speaker connection cannot override the latest direction',
     () async {
@@ -1696,12 +1730,14 @@ class _FakeLiveSession implements LiveTranslationSession {
     this.closeGate,
     this.connectError,
     this.connectFailureEvent,
+    this.closeError,
   });
 
   final Completer<void>? connectGate;
   final Completer<void>? closeGate;
   final Object? connectError;
   final LiveSessionFailure? connectFailureEvent;
+  final Object? closeError;
   final StreamController<LiveEvent> _controller =
       StreamController<LiveEvent>.broadcast(sync: true);
   final List<List<int>> audio = <List<int>>[];
@@ -1746,6 +1782,10 @@ class _FakeLiveSession implements LiveTranslationSession {
     closed = true;
     _ready = false;
     await closeGate?.future;
+    final Object? error = closeError;
+    if (error != null) {
+      throw error;
+    }
     if (!_controller.isClosed) {
       await _controller.close();
     }

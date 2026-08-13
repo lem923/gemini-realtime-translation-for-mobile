@@ -1091,22 +1091,20 @@ class ConversationController extends ChangeNotifier {
     if (_diagnosticStartedMicros != null) {
       _diagnosticStoppedMicros ??= _monotonicMicros();
     }
-    _sessions[_activeSpeaker]?.endAudioStream();
+    try {
+      _sessions[_activeSpeaker]?.endAudioStream();
+    } catch (_) {
+      // A broken transport must not prevent local media cleanup.
+    }
     _commitTurn(_activeSpeaker);
-    await _captureSubscription?.cancel();
+    final StreamSubscription<Uint8List>? captureSubscription =
+        _captureSubscription;
     _captureSubscription = null;
-    await _audioCapture.stop();
-    for (final StreamSubscription<LiveEvent> subscription
-        in _sessionSubscriptions.values) {
-      await subscription.cancel();
-    }
-    _sessionSubscriptions.clear();
-    for (final LiveTranslationSession session in _sessions.values) {
-      await session.close();
-    }
-    _sessions.clear();
-    await _flushPlayback();
-    await _releasePlayback();
+    await _cancelSubscriptionBestEffort(captureSubscription);
+    await _runCleanupBestEffort(_audioCapture.stop);
+    await _closeSessionsBestEffort();
+    await _runCleanupBestEffort(_flushPlayback);
+    await _runCleanupBestEffort(_releasePlayback);
     if (!preserveError) {
       _errorMessage = null;
     } else if (finalError != null) {
@@ -1140,6 +1138,42 @@ class ConversationController extends ChangeNotifier {
         finalError: message,
       ),
     );
+  }
+
+  Future<void> _closeSessionsBestEffort() async {
+    final List<StreamSubscription<LiveEvent>> subscriptions =
+        _sessionSubscriptions.values.toList(growable: false);
+    _sessionSubscriptions.clear();
+    for (final StreamSubscription<LiveEvent> subscription in subscriptions) {
+      await _cancelSubscriptionBestEffort(subscription);
+    }
+
+    final List<LiveTranslationSession> sessions = _sessions.values.toList(
+      growable: false,
+    );
+    _sessions.clear();
+    for (final LiveTranslationSession session in sessions) {
+      await _runCleanupBestEffort(session.close);
+    }
+  }
+
+  Future<void> _cancelSubscriptionBestEffort<T>(
+    StreamSubscription<T>? subscription,
+  ) async {
+    try {
+      await subscription?.cancel();
+    } catch (_) {
+      // Continue releasing independent resources after a callback race.
+    }
+  }
+
+  Future<void> _runCleanupBestEffort(Future<void> Function() operation) async {
+    try {
+      await operation();
+    } catch (_) {
+      // Cleanup is intentionally independent: one failed adapter or transport
+      // must never leave the remaining recorder, sessions, or player alive.
+    }
   }
 
   Future<void> _releasePlayback() async {
@@ -1273,22 +1307,35 @@ class ConversationController extends ChangeNotifier {
   }
 
   Future<void> _disposeResources() async {
-    await _stopOperation;
-    await stopReplay();
-    await _playbackEventSubscription?.cancel();
-    _playbackEventSubscription = null;
-    await _permissionSubscription?.cancel();
-    _permissionSubscription = null;
-    await _captureSubscription?.cancel();
-    await _audioCapture.dispose();
-    for (final StreamSubscription<LiveEvent> subscription
-        in _sessionSubscriptions.values) {
-      await subscription.cancel();
+    final Future<void>? stopOperation = _stopOperation;
+    if (stopOperation != null) {
+      await _runCleanupBestEffort(() => stopOperation);
     }
-    for (final LiveTranslationSession session in _sessions.values) {
-      await session.close();
+    await _runCleanupBestEffort(stopReplay);
+    try {
+      await _playbackEventSubscription?.cancel();
+    } catch (_) {
+      // Continue releasing the remaining resources.
+    } finally {
+      _playbackEventSubscription = null;
     }
-    await _flushPlayback();
-    await _releasePlayback();
+    try {
+      await _permissionSubscription?.cancel();
+    } catch (_) {
+      // Continue releasing the remaining resources.
+    } finally {
+      _permissionSubscription = null;
+    }
+    try {
+      await _captureSubscription?.cancel();
+    } catch (_) {
+      // Continue releasing the remaining resources.
+    } finally {
+      _captureSubscription = null;
+    }
+    await _runCleanupBestEffort(_audioCapture.dispose);
+    await _closeSessionsBestEffort();
+    await _runCleanupBestEffort(_flushPlayback);
+    await _runCleanupBestEffort(_releasePlayback);
   }
 }

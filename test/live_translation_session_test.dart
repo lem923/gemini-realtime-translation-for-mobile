@@ -7,6 +7,63 @@ import 'package:realtime_translation/live_translate/live_translation_session.dar
 
 void main() {
   test(
+    'closing during setup cancels connect without an unhandled error',
+    () async {
+      final HttpServer server = await HttpServer.bind(
+        InternetAddress.loopbackIPv4,
+        0,
+      );
+      final Completer<void> setupReceived = Completer<void>();
+      final Future<void> serverTask = () async {
+        final HttpRequest request = await server.first;
+        final WebSocket socket = await WebSocketTransformer.upgrade(request);
+        try {
+          await for (final Object? _ in socket) {
+            if (!setupReceived.isCompleted) {
+              setupReceived.complete();
+            }
+          }
+        } finally {
+          await socket.close();
+        }
+      }();
+      final GeminiLiveSession session = GeminiLiveSession(
+        apiKey: 'local-test-key',
+        targetLanguageCode: 'zh-Hans',
+        endpoint: Uri.parse(
+          'ws://${server.address.address}:${server.port}/live',
+        ),
+      );
+      final List<Object> unhandledErrors = <Object>[];
+      final Completer<void> zoneComplete = Completer<void>();
+
+      unawaited(
+        runZonedGuarded(
+          () async {
+            final Future<void> connecting = session.connect();
+            await setupReceived.future.timeout(const Duration(seconds: 2));
+            await session.close().timeout(const Duration(seconds: 1));
+            await connecting.timeout(const Duration(seconds: 1));
+            await Future<void>.delayed(const Duration(milliseconds: 20));
+            zoneComplete.complete();
+          },
+          (Object error, StackTrace stackTrace) {
+            unhandledErrors.add(error);
+            if (!zoneComplete.isCompleted) {
+              zoneComplete.complete();
+            }
+          },
+        ),
+      );
+
+      await zoneComplete.future.timeout(const Duration(seconds: 5));
+      await serverTask.timeout(const Duration(seconds: 2));
+      await server.close(force: true);
+      expect(unhandledErrors, isEmpty);
+    },
+  );
+
+  test(
     'setup close is reported to connect without an unhandled future',
     () async {
       final HttpServer server = await HttpServer.bind(

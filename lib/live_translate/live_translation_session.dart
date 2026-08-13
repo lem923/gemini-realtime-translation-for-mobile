@@ -130,6 +130,9 @@ class GeminiLiveSession implements LiveTranslationSession {
       await setupFuture.timeout(const Duration(seconds: 15));
       _reconnectAttempt = 0;
     } on TimeoutException {
+      if (_disposed || generation != _generation) {
+        return;
+      }
       _emitFailure(
         '连接 Gemini 超时，请检查网络后重试',
         retryable: _reconnectAttempt > 0,
@@ -139,6 +142,9 @@ class GeminiLiveSession implements LiveTranslationSession {
       _continueReconnectIfNeeded();
       rethrow;
     } on SocketException {
+      if (_disposed || generation != _generation) {
+        return;
+      }
       _emitFailure(
         '无法连接 Gemini，请检查网络',
         retryable: _reconnectAttempt > 0,
@@ -148,6 +154,9 @@ class GeminiLiveSession implements LiveTranslationSession {
       _continueReconnectIfNeeded();
       rethrow;
     } on WebSocketChannelException {
+      if (_disposed || generation != _generation) {
+        return;
+      }
       _emitFailure(
         '无法建立 Gemini Live 会话',
         retryable: _reconnectAttempt > 0,
@@ -157,12 +166,18 @@ class GeminiLiveSession implements LiveTranslationSession {
       _continueReconnectIfNeeded();
       rethrow;
     } on _SessionRejected catch (rejection) {
+      if (_disposed || generation != _generation) {
+        return;
+      }
       await _discardChannel(generation);
       if (rejection.retryable) {
         _continueReconnectIfNeeded();
       }
       rethrow;
     } catch (_) {
+      if (_disposed || generation != _generation) {
+        return;
+      }
       _emitFailure(
         '无法建立 Gemini Live 会话',
         retryable: _reconnectAttempt > 0,
@@ -351,6 +366,9 @@ class GeminiLiveSession implements LiveTranslationSession {
     required bool retryable,
     required LiveFailureKind kind,
   }) {
+    if (_disposed || _events.isClosed) {
+      return;
+    }
     _events.add(
       LiveSessionFailure(
         userMessage: message,
@@ -386,18 +404,36 @@ class GeminiLiveSession implements LiveTranslationSession {
     _ready = false;
     _generation += 1;
     _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    final Completer<void>? setupCompleter = _setupCompleter;
+    _setupCompleter = null;
+    if (setupCompleter != null && !setupCompleter.isCompleted) {
+      setupCompleter.completeError(StateError('Gemini session was closed'));
+    }
     final StreamSubscription<Object?>? subscription = _subscription;
     _subscription = null;
-    await subscription?.cancel();
+    try {
+      await subscription?.cancel();
+    } catch (_) {
+      // Continue releasing the socket and event stream even if cancellation
+      // races a transport failure.
+    }
     final IOWebSocketChannel? channel = _channel;
     _channel = null;
     if (channel != null) {
-      await channel.sink.close(status.normalClosure);
+      try {
+        await channel.sink.close(status.normalClosure);
+      } catch (_) {
+        // The peer may already have torn down the transport. The HttpClient
+        // close below remains the authoritative local release.
+      }
     }
     _httpClient?.close(force: true);
     _httpClient = null;
-    _events.add(const LivePhaseChanged(LiveSessionPhase.closed));
-    await _events.close();
+    if (!_events.isClosed) {
+      _events.add(const LivePhaseChanged(LiveSessionPhase.closed));
+      await _events.close();
+    }
   }
 }
 
