@@ -27,6 +27,9 @@ jobs:
         run: flutter analyze
       - name: Test
         run: flutter test --coverage
+      - name: Test and lint Android host layer
+        working-directory: android
+        run: ./gradlew :app:testDebugUnitTest :app:lintDebug
       - name: Build Android debug APK
         run: |
           for attempt in 1 2 3; do

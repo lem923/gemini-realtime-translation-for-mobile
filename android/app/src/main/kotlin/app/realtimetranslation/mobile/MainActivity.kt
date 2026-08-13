@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
+import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
 import android.media.AudioFocusRequest
 import android.media.AudioFormat
@@ -222,6 +223,16 @@ private class PcmStreamPlayer(
     private var running = false
     private var focusRequest: AudioFocusRequest? = null
     private var legacyFocusListener: AudioManager.OnAudioFocusChangeListener? = null
+    private var audioDeviceCallbackRegistered = false
+    private val audioDeviceCallback = object : AudioDeviceCallback() {
+        override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) {
+            refreshCommunicationRoute()
+        }
+
+        override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) {
+            refreshCommunicationRoute()
+        }
+    }
     @Volatile
     private var audioFocusGranted = false
     @Volatile
@@ -239,7 +250,7 @@ private class PcmStreamPlayer(
         val minimum = AudioTrack.getMinBufferSize(sampleRate, channelMask, encoding)
         val bufferBytes = max(minimum, sampleRate / 2)
         val attributes = AudioAttributes.Builder()
-            .setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY)
+            .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
             .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
             .build()
         val format = AudioFormat.Builder()
@@ -267,7 +278,8 @@ private class PcmStreamPlayer(
             interruptionReported = false
             clearQueue()
             check(requestAudioFocus(attributes)) { "Audio focus was not granted" }
-            routeToSpeaker()
+            registerAudioDeviceCallback()
+            selectPreferredCommunicationDevice()
             running = true
             track.play()
             worker = thread(name = "translated-pcm-playback", isDaemon = true) {
@@ -384,6 +396,10 @@ private class PcmStreamPlayer(
         }
         legacyFocusListener = null
         audioFocusGranted = false
+        if (audioDeviceCallbackRegistered) {
+            audioManager.unregisterAudioDeviceCallback(audioDeviceCallback)
+            audioDeviceCallbackRegistered = false
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             audioManager.clearCommunicationDevice()
         } else {
@@ -429,15 +445,35 @@ private class PcmStreamPlayer(
         return audioFocusGranted
     }
 
-    private fun routeToSpeaker() {
+    private fun registerAudioDeviceCallback() {
+        if (audioDeviceCallbackRegistered) return
+        audioManager.registerAudioDeviceCallback(audioDeviceCallback, Handler(Looper.getMainLooper()))
+        audioDeviceCallbackRegistered = true
+    }
+
+    private fun refreshCommunicationRoute() = synchronized(lifecycleLock) {
+        if (audioTrack != null) selectPreferredCommunicationDevice()
+    }
+
+    private fun selectPreferredCommunicationDevice() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val speaker = audioManager.availableCommunicationDevices.firstOrNull {
-                it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
+            val devices = audioManager.availableCommunicationDevices
+            val preferredType = AudioRoutePolicy.preferredType(
+                devices.map(AudioDeviceInfo::getType),
+                audioManager.communicationDevice?.type,
+            )
+            val preferred = devices.firstOrNull {
+                it.type == preferredType
             }
-            if (speaker != null) audioManager.setCommunicationDevice(speaker)
+            if (preferred != null && audioManager.setCommunicationDevice(preferred)) {
+                lastOutputRoute = routeName(preferred.type)
+            }
         } else {
+            val outputTypes = audioManager
+                .getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+                .map(AudioDeviceInfo::getType)
             @Suppress("DEPRECATION")
-            audioManager.isSpeakerphoneOn = true
+            audioManager.isSpeakerphoneOn = !AudioRoutePolicy.hasExternal(outputTypes)
         }
     }
 
