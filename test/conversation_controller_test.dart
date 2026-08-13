@@ -314,6 +314,86 @@ void main() {
   );
 
   test(
+    'shared-phone output keeps microphone blocked through echo tail',
+    () async {
+      int nowMicros = 0;
+      final _FakeAudioCapture capture = _FakeAudioCapture();
+      final _FakePlayback playback = _FakePlayback();
+      final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
+      final ConversationController controller = ConversationController(
+        keyStore: _MemoryKeyStore('stored-key'),
+        audioCapture: capture,
+        playback: playback,
+        monotonicMicros: () => nowMicros,
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) {
+              final _FakeLiveSession session = _FakeLiveSession();
+              sessions.add(session);
+              return session;
+            },
+      );
+
+      await controller.initialize();
+      await controller.startConversation();
+      playback.emitRoute(AudioOutputRoute.speaker);
+      sessions.first.emit(LiveAudioChunk(Uint8List(4800)));
+
+      nowMicros = 399000;
+      capture.emit(<int>[1]);
+      expect(sessions.first.audio, isEmpty);
+
+      nowMicros = 401000;
+      capture.emit(<int>[2]);
+      expect(sessions.first.audio, <List<int>>[
+        <int>[2],
+      ]);
+
+      await controller.stopConversation();
+      controller.dispose();
+    },
+  );
+
+  test(
+    'isolated output route reopens microphone with low-latency tail',
+    () async {
+      int nowMicros = 0;
+      final _FakeAudioCapture capture = _FakeAudioCapture();
+      final _FakePlayback playback = _FakePlayback();
+      final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
+      final ConversationController controller = ConversationController(
+        keyStore: _MemoryKeyStore('stored-key'),
+        audioCapture: capture,
+        playback: playback,
+        monotonicMicros: () => nowMicros,
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) {
+              final _FakeLiveSession session = _FakeLiveSession();
+              sessions.add(session);
+              return session;
+            },
+      );
+
+      await controller.initialize();
+      await controller.startConversation();
+      playback.emitRoute(AudioOutputRoute.bluetooth);
+      sessions.first.emit(LiveAudioChunk(Uint8List(4800)));
+
+      nowMicros = 179000;
+      capture.emit(<int>[1]);
+      expect(sessions.first.audio, isEmpty);
+
+      nowMicros = 181000;
+      capture.emit(<int>[2]);
+      expect(sessions.first.audio, <List<int>>[
+        <int>[2],
+      ]);
+
+      await controller.stopConversation();
+      controller.dispose();
+    },
+  );
+
+  test(
     'manual speaker switch commits output without a server turn-complete event',
     () async {
       final _FakeAudioCapture capture = _FakeAudioCapture();
@@ -433,7 +513,7 @@ void main() {
       nowMicros = 1500000;
       capture.emit(<int>[1]);
       expect(sessions.first.audio, isEmpty);
-      nowMicros = 2080001;
+      nowMicros = 2300001;
       capture.emit(<int>[2]);
       expect(sessions.first.audio, <List<int>>[
         <int>[2],
@@ -1569,6 +1649,9 @@ class _FakePlayback implements PcmPlaybackGateway {
   int disposeCount = 0;
 
   void emitInterruption() => _events.add(const PcmPlaybackInterrupted());
+
+  void emitRoute(AudioOutputRoute route) =>
+      _events.add(PcmPlaybackRouteChanged(route));
 
   @override
   Stream<PcmPlaybackEvent> get events => _events.stream;

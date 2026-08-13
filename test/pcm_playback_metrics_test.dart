@@ -30,4 +30,37 @@ void main() {
     expect(metrics.outputRoute, AudioOutputRoute.unknown);
     expect(metrics.audioFocusGranted, isFalse);
   });
+
+  test('decodes interruption and route-change playback events', () {
+    expect(parsePcmPlaybackEvent('interrupted'), isA<PcmPlaybackInterrupted>());
+
+    final PcmPlaybackEvent? routeEvent = parsePcmPlaybackEvent(
+      <Object?, Object?>{'type': 'routeChanged', 'outputRoute': 'bluetooth'},
+    );
+    expect(routeEvent, isA<PcmPlaybackRouteChanged>());
+    expect(
+      (routeEvent! as PcmPlaybackRouteChanged).route,
+      AudioOutputRoute.bluetooth,
+    );
+    expect(parsePcmPlaybackEvent('unexpected'), isNull);
+  });
+
+  test('uses a conservative echo tail only for shared-phone routes', () {
+    for (final AudioOutputRoute route in <AudioOutputRoute>[
+      AudioOutputRoute.unknown,
+      AudioOutputRoute.speaker,
+      AudioOutputRoute.earpiece,
+    ]) {
+      expect(echoGuardMicrosForRoute(route), sharedPhoneEchoGuardMicros);
+    }
+    for (final AudioOutputRoute route in <AudioOutputRoute>[
+      AudioOutputRoute.wired,
+      AudioOutputRoute.bluetooth,
+      AudioOutputRoute.usb,
+      AudioOutputRoute.hearingAid,
+      AudioOutputRoute.hdmi,
+    ]) {
+      expect(echoGuardMicrosForRoute(route), isolatedRouteEchoGuardMicros);
+    }
+  });
 }

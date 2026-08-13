@@ -45,9 +45,22 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        val pcmPlayer = PcmStreamPlayer(this) {
-            runOnUiThread { audioEventSink?.success("interrupted") }
-        }
+        val pcmPlayer = PcmStreamPlayer(
+            context = this,
+            onInterruption = {
+                runOnUiThread { audioEventSink?.success("interrupted") }
+            },
+            onRouteChanged = { route ->
+                runOnUiThread {
+                    audioEventSink?.success(
+                        mapOf(
+                            "type" to "routeChanged",
+                            "outputRoute" to route,
+                        ),
+                    )
+                }
+            },
+        )
         player = pcmPlayer
         EventChannel(
             flutterEngine.dartExecutor.binaryMessenger,
@@ -212,6 +225,7 @@ class MainActivity : FlutterActivity() {
 private class PcmStreamPlayer(
     context: Context,
     private val onInterruption: () -> Unit,
+    private val onRouteChanged: (String) -> Unit,
 ) {
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private val queue = ArrayBlockingQueue<ByteArray>(64)
@@ -305,6 +319,7 @@ private class PcmStreamPlayer(
                                 }
                                 offset += written
                             }
+                            updateLastOutputRoute()
                         }
                     }
                 }
@@ -466,14 +481,16 @@ private class PcmStreamPlayer(
                 it.type == preferredType
             }
             if (preferred != null && audioManager.setCommunicationDevice(preferred)) {
-                lastOutputRoute = routeName(preferred.type)
+                setLastOutputRoute(routeName(preferred.type))
             }
         } else {
             val outputTypes = audioManager
                 .getDevices(AudioManager.GET_DEVICES_OUTPUTS)
                 .map(AudioDeviceInfo::getType)
+            val hasExternal = AudioRoutePolicy.hasExternal(outputTypes)
             @Suppress("DEPRECATION")
-            audioManager.isSpeakerphoneOn = !AudioRoutePolicy.hasExternal(outputTypes)
+            audioManager.isSpeakerphoneOn = !hasExternal
+            if (!hasExternal) setLastOutputRoute("speaker")
         }
     }
 
@@ -499,7 +516,13 @@ private class PcmStreamPlayer(
 
     private fun updateLastOutputRoute() {
         val currentRoute = routeName(audioTrack?.routedDevice?.type)
-        if (currentRoute != "unknown") lastOutputRoute = currentRoute
+        setLastOutputRoute(currentRoute)
+    }
+
+    private fun setLastOutputRoute(route: String) {
+        if (route == "unknown" || route == lastOutputRoute) return
+        lastOutputRoute = route
+        onRouteChanged(route)
     }
 
     private fun clearQueue() = synchronized(queueLock) {

@@ -392,7 +392,7 @@ void main() {
       await tester.tap(replayButton);
       await tester.pump();
       expect(find.byTooltip('停止回放'), findsOneWidget);
-      await tester.pump(const Duration(milliseconds: 120));
+      await tester.pump(const Duration(milliseconds: 320));
       await tester.pump(const Duration(milliseconds: 100));
       await tester.pump();
 

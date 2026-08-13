@@ -77,6 +77,7 @@ class ConversationController extends ChangeNotifier {
   bool _playbackFailureReported = false;
   bool _playbackConfigured = false;
   bool _microphonePermissionGrantedOnce = false;
+  AudioOutputRoute _activeOutputRoute = AudioOutputRoute.unknown;
   int _captureBlockedUntilMicros = 0;
   int _scheduledPlaybackEndMicros = 0;
   int _conversationGeneration = 0;
@@ -129,7 +130,6 @@ class ConversationController extends ChangeNotifier {
   static const int maxReplayCacheBytes = 8 * 1024 * 1024;
   static const int _replayChunkBytes =
       outputSampleRateHz * bytesPerSample ~/ 10;
-  static const int _playbackEchoGuardMicros = 80000;
 
   bool get initialized => _initialized;
   bool get hasApiKey => _apiKey.isNotEmpty;
@@ -635,7 +635,8 @@ class ConversationController extends ChangeNotifier {
       _scheduledPlaybackEndMicros - now,
     );
     _captureBlockedUntilMicros =
-        _scheduledPlaybackEndMicros + _playbackEchoGuardMicros;
+        _scheduledPlaybackEndMicros +
+        echoGuardMicrosForRoute(_activeOutputRoute);
     _appendPlayback(() => _playback.enqueue(bytes));
   }
 
@@ -685,7 +686,18 @@ class ConversationController extends ChangeNotifier {
   }
 
   void _handlePlaybackEvent(PcmPlaybackEvent event) {
-    if (_disposed || event is! PcmPlaybackInterrupted) {
+    if (_disposed) {
+      return;
+    }
+    if (event case PcmPlaybackRouteChanged(:final AudioOutputRoute route)) {
+      _activeOutputRoute = route;
+      if (_scheduledPlaybackEndMicros > _monotonicMicros()) {
+        _captureBlockedUntilMicros =
+            _scheduledPlaybackEndMicros + echoGuardMicrosForRoute(route);
+      }
+      return;
+    }
+    if (event is! PcmPlaybackInterrupted) {
       return;
     }
     if (_replayingTurnId != null) {
@@ -989,7 +1001,8 @@ class ConversationController extends ChangeNotifier {
           (outputSampleRateHz * bytesPerSample);
       _scheduledPlaybackEndMicros = now + durationMicros;
       _captureBlockedUntilMicros =
-          _scheduledPlaybackEndMicros + _playbackEchoGuardMicros;
+          _scheduledPlaybackEndMicros +
+          echoGuardMicrosForRoute(_activeOutputRoute);
       _maximumScheduledPlaybackMicros = math.max(
         _maximumScheduledPlaybackMicros,
         durationMicros,
@@ -1014,7 +1027,7 @@ class ConversationController extends ChangeNotifier {
       }
       if (_isCurrentReplay(generation)) {
         await Future<void>.delayed(
-          const Duration(microseconds: _playbackEchoGuardMicros),
+          Duration(microseconds: echoGuardMicrosForRoute(_activeOutputRoute)),
         );
       }
     } catch (_) {
@@ -1136,6 +1149,7 @@ class ConversationController extends ChangeNotifier {
       _handlePlaybackFailure();
     } finally {
       _playbackConfigured = false;
+      _activeOutputRoute = AudioOutputRoute.unknown;
     }
   }
 

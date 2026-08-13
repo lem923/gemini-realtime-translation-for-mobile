@@ -22,6 +22,44 @@ class PcmPlaybackInterrupted extends PcmPlaybackEvent {
   const PcmPlaybackInterrupted();
 }
 
+class PcmPlaybackRouteChanged extends PcmPlaybackEvent {
+  const PcmPlaybackRouteChanged(this.route);
+
+  final AudioOutputRoute route;
+}
+
+const int sharedPhoneEchoGuardMicros = 300000;
+const int isolatedRouteEchoGuardMicros = 80000;
+
+int echoGuardMicrosForRoute(AudioOutputRoute route) => switch (route) {
+  AudioOutputRoute.wired ||
+  AudioOutputRoute.bluetooth ||
+  AudioOutputRoute.usb ||
+  AudioOutputRoute.hearingAid ||
+  AudioOutputRoute.hdmi => isolatedRouteEchoGuardMicros,
+  AudioOutputRoute.unknown ||
+  AudioOutputRoute.speaker ||
+  AudioOutputRoute.earpiece => sharedPhoneEchoGuardMicros,
+};
+
+@visibleForTesting
+PcmPlaybackEvent? parsePcmPlaybackEvent(Object? value) {
+  if (value == 'interrupted') {
+    return const PcmPlaybackInterrupted();
+  }
+  if (value case <Object?, Object?>{
+    'type': 'routeChanged',
+    'outputRoute': final String routeName,
+  }) {
+    final AudioOutputRoute route = AudioOutputRoute.values.firstWhere(
+      (AudioOutputRoute candidate) => candidate.name == routeName,
+      orElse: () => AudioOutputRoute.unknown,
+    );
+    return PcmPlaybackRouteChanged(route);
+  }
+  return null;
+}
+
 @immutable
 class PcmPlaybackMetrics {
   const PcmPlaybackMetrics({
@@ -94,8 +132,9 @@ class PlatformPcmPlaybackGateway implements PcmPlaybackGateway {
   @override
   Stream<PcmPlaybackEvent> get events => _eventChannel
       .receiveBroadcastStream()
-      .where((Object? event) => event == 'interrupted')
-      .map((Object? _) => const PcmPlaybackInterrupted());
+      .map(parsePcmPlaybackEvent)
+      .where((PcmPlaybackEvent? event) => event != null)
+      .cast<PcmPlaybackEvent>();
 
   @override
   Future<void> configure() =>
