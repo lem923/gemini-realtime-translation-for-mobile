@@ -1049,7 +1049,7 @@ void main() {
   );
 
   test(
-    'system audio interruption releases capture and live sessions',
+    'system audio interruption degrades playback and keeps capture alive',
     () async {
       final _FakeAudioCapture capture = _FakeAudioCapture();
       final _FakePlayback playback = _FakePlayback();
@@ -1074,15 +1074,19 @@ void main() {
       await _flushEvents();
       await _flushEvents();
 
-      expect(controller.phase, ConversationPhase.failed);
+      expect(controller.phase, ConversationPhase.listening);
+      expect(controller.audioMuted, isTrue);
       expect(controller.errorMessage, contains('系统中断'));
-      expect(capture.stopped, isTrue);
-      expect(sessions.every((session) => session.closed), isTrue);
+      expect(capture.stopped, isFalse);
+      expect(sessions.every((session) => session.closed), isFalse);
       expect(playback.operations, contains('dispose'));
       final ConversationDiagnostics diagnostics = await controller
           .collectDiagnostics();
       expect(diagnostics.audioInterruptions, 1);
 
+      await controller.stopConversation();
+      expect(capture.stopped, isTrue);
+      expect(sessions.every((session) => session.closed), isTrue);
       controller.dispose();
     },
   );
@@ -1829,7 +1833,7 @@ void main() {
   );
 
   test(
-    'microphone stream failure automatically closes live sessions',
+    'microphone stream failure recovers capture and keeps sessions alive',
     () async {
       final _FakeAudioCapture capture = _FakeAudioCapture();
       final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
@@ -1849,18 +1853,23 @@ void main() {
       await controller.startConversation();
       await _flushEvents();
       capture.emitError(StateError('microphone disconnected'));
-      await controller.stopConversation(preserveError: true);
+      await Future<void>.delayed(const Duration(milliseconds: 350));
+      await _flushEvents();
 
-      expect(controller.phase, ConversationPhase.failed);
-      expect(controller.errorMessage, contains('麦克风采集失败'));
+      expect(controller.phase, ConversationPhase.listening);
+      expect(controller.errorMessage, isNull);
+      expect(capture.startCount, 2);
       expect(capture.stopped, isTrue);
+      expect(sessions.every((session) => session.closed), isFalse);
+
+      await controller.stopConversation();
       expect(sessions.every((session) => session.closed), isTrue);
       controller.dispose();
     },
   );
 
   test(
-    'microphone stream completion automatically releases sessions',
+    'microphone stream completion terminates only after recovery attempts',
     () async {
       final _FakeAudioCapture capture = _FakeAudioCapture();
       final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
@@ -1881,8 +1890,8 @@ void main() {
       await _flushEvents();
 
       await capture.closeStream();
-      for (var index = 0; index < 20; index += 1) {
-        await _flushEvents();
+      for (var index = 0; index < 60; index += 1) {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
         if (sessions.isNotEmpty &&
             sessions.every((session) => session.closed) &&
             !controller.isBusy) {
@@ -1893,7 +1902,49 @@ void main() {
       expect(controller.phase, ConversationPhase.failed);
       expect(controller.errorMessage, contains('麦克风采集已停止'));
       expect(capture.stopped, isTrue);
+      expect(capture.startCount, greaterThanOrEqualTo(4));
       expect(sessions.every((session) => session.closed), isTrue);
+      controller.dispose();
+    },
+  );
+
+  test(
+    'audio interruption degrades to text without stopping the conversation',
+    () async {
+      final _FakeAudioCapture capture = _FakeAudioCapture();
+      final _FakePlayback playback = _FakePlayback();
+      final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
+      final ConversationController controller = ConversationController(
+        keyStore: _MemoryKeyStore('stored-key'),
+        audioCapture: capture,
+        playback: playback,
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) {
+              final _FakeLiveSession session = _FakeLiveSession();
+              sessions.add(session);
+              return session;
+            },
+      );
+
+      await controller.initialize();
+      await controller.startConversation();
+      await _flushEvents();
+      playback.emitInterruption();
+      await _flushEvents();
+
+      expect(controller.phase, ConversationPhase.listening);
+      expect(controller.audioMuted, isTrue);
+      expect(controller.errorMessage, contains('译音被系统中断'));
+      expect(capture.stopped, isFalse);
+      expect(sessions.every((session) => session.closed), isFalse);
+
+      controller.toggleAudioMuted();
+      await _flushEvents();
+      await _flushEvents();
+      expect(controller.audioMuted, isFalse);
+      expect(controller.errorMessage, isNull);
+
+      await controller.stopConversation();
       controller.dispose();
     },
   );

@@ -97,6 +97,7 @@ class ConversationController extends ChangeNotifier {
   int _replayGeneration = 0;
   int _playbackGeneration = 0;
   int _playbackFlushesInFlight = 0;
+  int _captureRecoveryAttempts = 0;
   int _turnId = 0;
   int? _replayingTurnId;
   int? _diagnosticStartedMicros;
@@ -143,6 +144,8 @@ class ConversationController extends ChangeNotifier {
   static const int maxReplayTurnBytes =
       outputSampleRateHz * bytesPerSample * 30;
   static const int maxReplayCacheBytes = 8 * 1024 * 1024;
+  static const int maxCaptureRecoveryAttempts = 3;
+  static const Duration captureRecoveryDelay = Duration(milliseconds: 300);
   static const int _replayChunkBytes =
       outputSampleRateHz * bytesPerSample ~/ 10;
 
@@ -380,6 +383,7 @@ class ConversationController extends ChangeNotifier {
     _errorMessage = null;
     _resetDiagnostics(_monotonicMicros());
     final int generation = ++_conversationGeneration;
+    _captureRecoveryAttempts = 0;
     notifyListeners();
     try {
       final bool permissionGranted = await _audioCapture.hasPermission();
@@ -433,30 +437,19 @@ class ConversationController extends ChangeNotifier {
         }
         captureTerminated = true;
         if (_isCurrentConversation(generation) && _stopOperation == null) {
-          _terminateConversation(message);
+          unawaited(_recoverOrTerminateCapture(generation, message));
         }
       }
 
-      late final StreamSubscription<Uint8List> captureSubscription;
-      captureSubscription = stream.listen(
-        (Uint8List chunk) {
-          if (_isCurrentConversation(generation) &&
-              identical(_captureSubscription, captureSubscription)) {
-            _routeMicrophoneChunk(chunk);
-          }
-        },
-        onError: (Object error, StackTrace stackTrace) {
-          if (identical(_captureSubscription, captureSubscription)) {
-            handleCaptureTermination('麦克风采集失败，请重试');
-          }
-        },
-        onDone: () {
-          if (identical(_captureSubscription, captureSubscription)) {
-            handleCaptureTermination('麦克风采集已停止，请重试');
-          }
-        },
-        cancelOnError: false,
-      );
+      // The active subscription is cancelled through _captureSubscription when
+      // the capture is replaced, stopped, or recovered.
+      // ignore: cancel_subscriptions
+      final StreamSubscription<Uint8List> captureSubscription =
+          _subscribeToCapture(
+            stream: stream,
+            generation: generation,
+            onTermination: handleCaptureTermination,
+          );
       _captureSubscription = captureSubscription;
       _phase = ConversationPhase.listening;
       _listeningReadyMilliseconds ??= _elapsedDiagnosticMilliseconds();
@@ -638,6 +631,96 @@ class ConversationController extends ChangeNotifier {
         _microphoneChunksSent += 1;
       } catch (_) {
         _terminateConversation('连接已中断，请检查网络后重试');
+      }
+    }
+  }
+
+  StreamSubscription<Uint8List> _subscribeToCapture({
+    required Stream<Uint8List> stream,
+    required int generation,
+    required void Function(String message) onTermination,
+  }) {
+    late final StreamSubscription<Uint8List> subscription;
+    subscription = stream.listen(
+      (Uint8List chunk) {
+        if (_isCurrentConversation(generation) &&
+            identical(_captureSubscription, subscription)) {
+          _routeMicrophoneChunk(chunk);
+        }
+      },
+      onError: (Object error, StackTrace stackTrace) {
+        if (identical(_captureSubscription, subscription)) {
+          onTermination('麦克风采集失败，请重试');
+        }
+      },
+      onDone: () {
+        if (identical(_captureSubscription, subscription)) {
+          onTermination('麦克风采集已停止，请重试');
+        }
+      },
+      cancelOnError: false,
+    );
+    return subscription;
+  }
+
+  Future<void> _recoverOrTerminateCapture(
+    int generation,
+    String message,
+  ) async {
+    if (!_isCurrentConversation(generation) || _stopOperation != null) {
+      return;
+    }
+    if (_captureRecoveryAttempts >= maxCaptureRecoveryAttempts) {
+      _terminateConversation(message);
+      return;
+    }
+    _captureRecoveryAttempts += 1;
+    final SpeakerSide side = _activeSpeaker;
+    try {
+      _sessions[side]?.endAudioStream();
+    } catch (_) {
+      // A broken transport must not prevent capture recovery.
+    }
+    try {
+      await _audioCapture.stop();
+    } catch (_) {
+      // The authoritative start below replaces a recorder that failed to stop.
+    }
+    await Future<void>.delayed(captureRecoveryDelay);
+    if (!_isCurrentConversation(generation) || _stopOperation != null) {
+      return;
+    }
+    try {
+      final Stream<Uint8List> stream = await _audioCapture.start();
+      if (!_isCurrentConversation(generation) || _stopOperation != null) {
+        await _audioCapture.stop();
+        return;
+      }
+      var recoveredTerminated = false;
+      void onTermination(String nextMessage) {
+        if (recoveredTerminated) {
+          return;
+        }
+        recoveredTerminated = true;
+        if (_isCurrentConversation(generation) && _stopOperation == null) {
+          unawaited(_recoverOrTerminateCapture(generation, nextMessage));
+        }
+      }
+
+      // The replacement subscription is owned by _captureSubscription until
+      // the capture is replaced, stopped, or recovered again.
+      // ignore: cancel_subscriptions
+      final StreamSubscription<Uint8List> subscription = _subscribeToCapture(
+        stream: stream,
+        generation: generation,
+        onTermination: onTermination,
+      );
+      final StreamSubscription<Uint8List>? previous = _captureSubscription;
+      _captureSubscription = subscription;
+      await _cancelSubscriptionBestEffort(previous);
+    } catch (_) {
+      if (_isCurrentConversation(generation) && _stopOperation == null) {
+        _terminateConversation(message);
       }
     }
   }
@@ -889,8 +972,25 @@ class ConversationController extends ChangeNotifier {
     if (_captureSubscription == null && !isBusy && !isListening) {
       return;
     }
+    if (_audioMuted && !_playbackConfigured) {
+      // The interrupted run is already retired; a duplicate system event must
+      // not repeat the diagnostics or the user message.
+      return;
+    }
     _audioInterruptions += 1;
-    _terminateConversation('音频被系统中断，翻译已停止');
+    // An audio-focus interruption retires only the interrupted playback run.
+    // The Gemini sessions and microphone stay alive: translated text keeps
+    // flowing and the user can restore voice with the unmute control. Only
+    // explicit stop, direction change, or permission revocation may end the
+    // stream.
+    _audioMuted = true;
+    _playbackFailureReported = false;
+    _invalidatePlaybackOperations();
+    _playbackConfigured = false;
+    _activeOutputRoute = AudioOutputRoute.unknown;
+    unawaited(_releasePlayback());
+    _errorMessage = '译音被系统中断，文字翻译继续；点顶部音量按钮可恢复语音';
+    notifyListeners();
   }
 
   void _cacheTurnAudio(SpeakerSide side, Uint8List bytes) {
