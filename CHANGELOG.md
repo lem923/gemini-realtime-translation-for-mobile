@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-08-13
+
+### Fixed
+
+- Configured Android microphone capture with the voice-communication source so
+  the 16 kHz input path receives the platform's VoIP tuning instead of relying
+  on the recorder default.
+- Disabled the recorder plugin's independent Bluetooth route management. The
+  native communication adapter is now the only component that selects and
+  clears the matching input/output route.
+
+### Tests
+
+- Added three capture-contract tests for the Gemini PCM format, Android
+  communication source, speech preprocessing, and single route/focus owner.
+- Passed all 67 Flutter tests at 85.4% line coverage, six Android host tests,
+  Flutter analysis, Android lint, and a debug APK build.
+- On Android API 36, verified an active 16 kHz `VOICE_COMMUNICATION` recording,
+  24 kHz voice-communication playback, speaker route, and one communication
+  mode owner. Manual stop removed the recording client, restored normal mode,
+  and cleared the preferred communication device without audio errors or app
+  crashes.
+
 ## [0.13.0] - 2026-08-13
 
 ### Added
