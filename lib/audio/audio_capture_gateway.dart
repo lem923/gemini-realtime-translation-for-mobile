@@ -86,6 +86,8 @@ class RecordAudioCaptureGateway implements AudioCaptureGateway {
   StreamSubscription<RecordState>? _stateSubscription;
   StreamSubscription<Uint8List>? _rawSubscription;
   StreamController<Uint8List>? _output;
+  Completer<void>? _startupCompleter;
+  int _captureGeneration = 0;
   PcmChunker _chunker = PcmChunker(chunkSizeBytes: inputChunkBytes);
 
   @override
@@ -94,14 +96,22 @@ class RecordAudioCaptureGateway implements AudioCaptureGateway {
   @override
   Future<Stream<Uint8List>> start() async {
     await stop();
+    final int generation = ++_captureGeneration;
     _chunker = PcmChunker(chunkSizeBytes: inputChunkBytes);
     final StreamController<Uint8List> output = StreamController<Uint8List>();
     _output = output;
     final Completer<void> startup = Completer<void>();
+    _startupCompleter = startup;
+    // Stop can cancel startup while the native start method is still pending.
+    // Observe the error immediately while preserving it for the awaited path.
+    unawaited(startup.future.catchError((Object _) {}));
     bool captureReady = false;
     bool failureReported = false;
 
     void reportFailure(Object error, StackTrace stackTrace) {
+      if (generation != _captureGeneration) {
+        return;
+      }
       if (!captureReady) {
         if (!startup.isCompleted) {
           startup.completeError(
@@ -127,8 +137,14 @@ class RecordAudioCaptureGateway implements AudioCaptureGateway {
       final Stream<Uint8List> raw = await _recorder.startStream(
         liveTranslationRecordConfig,
       );
+      if (generation != _captureGeneration) {
+        throw const AudioCaptureStartupException();
+      }
       _rawSubscription = raw.listen(
         (Uint8List bytes) {
+          if (generation != _captureGeneration) {
+            return;
+          }
           for (final Uint8List chunk in _chunker.add(bytes)) {
             output.add(chunk);
             if (!captureReady) {
@@ -139,6 +155,9 @@ class RecordAudioCaptureGateway implements AudioCaptureGateway {
         },
         onError: reportFailure,
         onDone: () {
+          if (generation != _captureGeneration) {
+            return;
+          }
           if (!captureReady) {
             reportFailure(
               const AudioCaptureStartupException(),
@@ -151,18 +170,30 @@ class RecordAudioCaptureGateway implements AudioCaptureGateway {
         cancelOnError: false,
       );
       await startup.future.timeout(startupTimeout);
+      if (generation != _captureGeneration) {
+        throw const AudioCaptureStartupException();
+      }
+      if (identical(_startupCompleter, startup)) {
+        _startupCompleter = null;
+      }
       return output.stream;
     } on AudioCaptureStartupException {
-      await stop();
+      if (generation == _captureGeneration) {
+        await stop();
+      }
       rethrow;
     } on TimeoutException catch (_, stackTrace) {
-      await stop();
+      if (generation == _captureGeneration) {
+        await stop();
+      }
       Error.throwWithStackTrace(
         const AudioCaptureStartupException(),
         stackTrace,
       );
     } catch (error, stackTrace) {
-      await stop();
+      if (generation == _captureGeneration) {
+        await stop();
+      }
       Error.throwWithStackTrace(
         const AudioCaptureStartupException(),
         stackTrace,
@@ -172,6 +203,15 @@ class RecordAudioCaptureGateway implements AudioCaptureGateway {
 
   @override
   Future<void> stop() async {
+    _captureGeneration += 1;
+    final Completer<void>? startup = _startupCompleter;
+    _startupCompleter = null;
+    if (startup != null && !startup.isCompleted) {
+      startup.completeError(
+        const AudioCaptureStartupException(),
+        StackTrace.current,
+      );
+    }
     await _stateSubscription?.cancel();
     _stateSubscription = null;
     await _rawSubscription?.cancel();

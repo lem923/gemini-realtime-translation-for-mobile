@@ -92,6 +92,58 @@ void main() {
     expect(recorder.stopCount, 1);
     await gateway.dispose();
   });
+
+  test(
+    'stop cancels a pending startup without waiting for its timeout',
+    () async {
+      final _FakeRecorderBackend recorder = _FakeRecorderBackend();
+      final RecordAudioCaptureGateway gateway = RecordAudioCaptureGateway(
+        recorder: recorder,
+        startupTimeout: const Duration(seconds: 1),
+      );
+
+      final Future<Stream<Uint8List>> starting = gateway.start();
+      final Future<void> failure = expectLater(
+        starting.timeout(const Duration(milliseconds: 100)),
+        throwsA(isA<AudioCaptureStartupException>()),
+      );
+      await Future<void>.delayed(Duration.zero);
+      await gateway.stop();
+
+      await failure;
+      expect(recorder.stopCount, 1);
+      await gateway.dispose();
+    },
+  );
+
+  test('cancelled startup cannot stop the next healthy capture', () async {
+    final _FakeRecorderBackend recorder = _FakeRecorderBackend();
+    final RecordAudioCaptureGateway gateway = RecordAudioCaptureGateway(
+      recorder: recorder,
+      startupTimeout: const Duration(milliseconds: 30),
+    );
+
+    final Future<Stream<Uint8List>> firstStart = gateway.start();
+    final Future<void> firstFailure = expectLater(
+      firstStart,
+      throwsA(isA<AudioCaptureStartupException>()),
+    );
+    await Future<void>.delayed(Duration.zero);
+    await gateway.stop();
+    await firstFailure;
+
+    final Future<Stream<Uint8List>> secondStart = gateway.start();
+    await Future<void>.delayed(Duration.zero);
+    final Uint8List chunk = Uint8List(inputChunkBytes);
+    recorder.audio.add(chunk);
+    final Stream<Uint8List> secondStream = await secondStart;
+    expect(await secondStream.first, chunk);
+
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    expect(recorder.recording, isTrue);
+    expect(recorder.stopCount, 1);
+    await gateway.dispose();
+  });
 }
 
 class _FakeRecorderBackend implements AudioRecorderBackend {
