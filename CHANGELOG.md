@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-08-13
+
+### Added
+
+- 耳机分离 conversation mode: with a microphone-equipped headset connected,
+  the headset mic captures the wearer (speaker A) while the built-in mic
+  captures the other person (speaker B). Direction switches automatically on
+  detected speech; A's translation plays on the phone speaker and B's
+  translation plays on the headset. Fails closed with a clear message when no
+  headset is available. Manual direction selection remains unchanged in the
+  other two modes.
+- Sentence-by-sentence finalization now requires a 1.5 s silence tail before
+  an utterance is considered finished.
+- Diagnostics report automatic direction switches and headset state.
+
+### Changed
+
+- Context-window compression A/B verified against the real Live API: the
+  AI Studio examples' `triggerTokens: 0` / `targetTokens: 0` config is
+  accepted and behaves identically to the current empty sliding-window
+  config (zeros mean "unset" server-side), so the production setup is
+  unchanged. The probe tool is included for future experiments.
+
+### Tests
+
+- 123 Flutter tests pass, including headset fail-closed, auto-direction,
+  per-track playback routing, and 1.5 s-finalization regressions; Android
+  host tests and lint pass. On-device runs verified the three-way mode
+  selector and the no-headset fail-closed hint.
+
 ## [0.22.0] - 2026-08-13
 
 ### Added

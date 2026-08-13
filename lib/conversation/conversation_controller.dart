@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 
 import '../audio/audio_capture_gateway.dart';
 import '../audio/audio_constants.dart';
+import '../audio/headset_capture_gateway.dart';
 import '../audio/pcm_playback_gateway.dart';
 import '../audio/speech_activity_detector.dart';
 import '../live_translate/live_event.dart';
@@ -24,6 +25,7 @@ class ConversationController extends ChangeNotifier {
     ApiKeyStore? keyStore,
     AudioCaptureGateway? audioCapture,
     PcmPlaybackGateway? playback,
+    HeadsetCaptureGateway? headsetCapture,
     LanguagePairStore? languagePairStore,
     MicrophonePermissionGateway? permissionGateway,
     LiveSessionFactory? sessionFactory,
@@ -32,6 +34,7 @@ class ConversationController extends ChangeNotifier {
   }) : _keyStore = keyStore ?? SecureApiKeyStore(),
        _audioCapture = audioCapture ?? RecordAudioCaptureGateway(),
        _playback = playback ?? PlatformPcmPlaybackGateway(),
+       _headsetCapture = headsetCapture ?? NativeHeadsetCaptureGateway(),
        _languagePairStore =
            languagePairStore ?? const DisabledLanguagePairStore(),
        _permissionGateway =
@@ -48,6 +51,7 @@ class ConversationController extends ChangeNotifier {
   final ApiKeyStore _keyStore;
   final AudioCaptureGateway _audioCapture;
   final PcmPlaybackGateway _playback;
+  final HeadsetCaptureGateway _headsetCapture;
   final LanguagePairStore _languagePairStore;
   final MicrophonePermissionGateway _permissionGateway;
   final LiveSessionFactory _sessionFactory;
@@ -71,6 +75,11 @@ class ConversationController extends ChangeNotifier {
       };
 
   StreamSubscription<Uint8List>? _captureSubscription;
+  StreamSubscription<Uint8List>? _headsetSubscription;
+  SpeechActivityDetector _headsetDetector = SpeechActivityDetector();
+  HeadsetCaptureState _headsetState = HeadsetCaptureState.unavailable;
+  int _phoneSpeechStreak = 0;
+  int _headsetSpeechStreak = 0;
   StreamSubscription<PcmPlaybackEvent>? _playbackEventSubscription;
   StreamSubscription<MicrophonePermissionStatus>? _permissionSubscription;
   Future<void> _playbackChain = Future<void>.value();
@@ -115,6 +124,7 @@ class ConversationController extends ChangeNotifier {
   int _microphoneChunksHeld = 0;
   int _utterancesDetected = 0;
   int _bargeIns = 0;
+  int _autoDirectionSwitches = 0;
   int _suppressedSpeechStreak = 0;
   int _lastBargeInMicros = -bargeInCooldownMicros;
   int _outputAudioChunks = 0;
@@ -156,6 +166,7 @@ class ConversationController extends ChangeNotifier {
   static const Duration captureRecoveryDelay = Duration(milliseconds: 300);
   static const int bargeInSpeechChunks = 3;
   static const int bargeInCooldownMicros = 1500000;
+  static const int autoDirectionSpeechChunks = 2;
   static const int _replayChunkBytes =
       outputSampleRateHz * bytesPerSample ~/ 10;
 
@@ -183,6 +194,8 @@ class ConversationController extends ChangeNotifier {
   ConversationPhase get phase => _phase;
   SpeakerSide get activeSpeaker => _activeSpeaker;
   ConversationMode get mode => _mode;
+  HeadsetCaptureState get headsetState => _headsetState;
+  bool get isHeadsetMode => _mode == ConversationMode.headsetSplit;
   TranslationLanguage get languageA => _languageA;
   TranslationLanguage get languageB => _languageB;
   TranslationLanguage get activeSourceLanguage =>
@@ -396,6 +409,7 @@ class ConversationController extends ChangeNotifier {
     final int generation = ++_conversationGeneration;
     _captureRecoveryAttempts = 0;
     _speechDetector = SpeechActivityDetector();
+    _headsetDetector = SpeechActivityDetector();
     _suppressedSpeechStreak = 0;
     _lastBargeInMicros = -bargeInCooldownMicros;
     notifyListeners();
@@ -465,6 +479,55 @@ class ConversationController extends ChangeNotifier {
             onTermination: handleCaptureTermination,
           );
       _captureSubscription = captureSubscription;
+      if (isHeadsetMode) {
+        final HeadsetCaptureState headsetState = await _headsetCapture.state();
+        _headsetState = headsetState;
+        if (!_isCurrentConversation(generation)) {
+          return;
+        }
+        if (headsetState != HeadsetCaptureState.available) {
+          await _audioCapture.stop();
+          _terminateConversation('耳机分离模式需要连接带麦克风的耳机，未检测到耳机');
+          return;
+        }
+        final Stream<Uint8List> headsetStream = await _headsetCapture.start();
+        if (!_isCurrentConversation(generation)) {
+          await _headsetCapture.stop();
+          return;
+        }
+        var headsetTerminated = false;
+        void handleHeadsetTermination() {
+          if (headsetTerminated) {
+            return;
+          }
+          headsetTerminated = true;
+          if (_isCurrentConversation(generation) && _stopOperation == null) {
+            _terminateConversation('耳机麦克风连接中断，请重新连接耳机');
+          }
+        }
+
+        late final StreamSubscription<Uint8List> headsetSubscription;
+        headsetSubscription = headsetStream.listen(
+          (Uint8List chunk) {
+            if (_isCurrentConversation(generation) &&
+                identical(_headsetSubscription, headsetSubscription)) {
+              _routeHeadsetChunk(chunk);
+            }
+          },
+          onError: (Object error, StackTrace stackTrace) {
+            if (identical(_headsetSubscription, headsetSubscription)) {
+              handleHeadsetTermination();
+            }
+          },
+          onDone: () {
+            if (identical(_headsetSubscription, headsetSubscription)) {
+              handleHeadsetTermination();
+            }
+          },
+          cancelOnError: false,
+        );
+        _headsetSubscription = headsetSubscription;
+      }
       _phase = ConversationPhase.listening;
       _listeningReadyMilliseconds ??= _elapsedDiagnosticMilliseconds();
       notifyListeners();
@@ -628,12 +691,18 @@ class ConversationController extends ChangeNotifier {
     if (!isListening) {
       return;
     }
-    final LiveTranslationSession? session = _sessions[_activeSpeaker];
+    final LiveTranslationSession? session = isHeadsetMode
+        ? _sessions[SpeakerSide.b]
+        : _sessions[_activeSpeaker];
     if (session?.isReady != true) {
       return;
     }
     final SpeechGateDecision decision = _speechDetector.add(chunk);
     final int now = _monotonicMicros();
+    if (isHeadsetMode) {
+      _routeHeadsetModePhoneChunk(session!, decision, now, chunk);
+      return;
+    }
     final bool echoGuarded =
         _mode == ConversationMode.sentenceBySentence &&
         (_playbackFlushesInFlight > 0 || now < _captureBlockedUntilMicros);
@@ -677,6 +746,119 @@ class ConversationController extends ChangeNotifier {
       case SpeechGateDecision.forward:
         _sendMicrophoneChunk(session!, chunk);
     }
+  }
+
+  /// In headset-split mode the built-in microphone belongs to speaker B. It
+  /// is echo-guarded against speaker-A translations playing on the phone
+  /// speaker; sustained speech during that playback barges in and switches
+  /// the direction automatically.
+  void _routeHeadsetModePhoneChunk(
+    LiveTranslationSession sessionB,
+    SpeechGateDecision decision,
+    int now,
+    Uint8List chunk,
+  ) {
+    final bool speakerGuarded =
+        _playbackFlushesInFlight > 0 || now < _captureBlockedUntilMicros;
+    if (speakerGuarded) {
+      if (decision == SpeechGateDecision.forward &&
+          _playbackFlushesInFlight == 0) {
+        _phoneSpeechStreak += 1;
+        if (_phoneSpeechStreak >= autoDirectionSpeechChunks &&
+            now - _lastBargeInMicros >= bargeInCooldownMicros) {
+          _phoneSpeechStreak = 0;
+          _lastBargeInMicros = now;
+          _bargeIns += 1;
+          _autoSwitchSpeaker(SpeakerSide.b);
+          _sendMicrophoneChunk(sessionB, chunk);
+          unawaited(_flushPlayback());
+          return;
+        }
+      } else {
+        _phoneSpeechStreak = 0;
+      }
+      _microphoneChunksSuppressed += 1;
+      return;
+    }
+    switch (decision) {
+      case SpeechGateDecision.hold:
+        _microphoneChunksHeld += 1;
+        _phoneSpeechStreak = 0;
+      case SpeechGateDecision.finalize:
+        _microphoneChunksHeld += 1;
+        _utterancesDetected += 1;
+        _phoneSpeechStreak = 0;
+      case SpeechGateDecision.forward:
+        if (_activeSpeaker != SpeakerSide.b) {
+          _phoneSpeechStreak += 1;
+          if (_phoneSpeechStreak >= autoDirectionSpeechChunks) {
+            _phoneSpeechStreak = 0;
+            _autoSwitchSpeaker(SpeakerSide.b);
+            _sendMicrophoneChunk(sessionB, chunk);
+            return;
+          }
+        } else {
+          _phoneSpeechStreak = 0;
+          _sendMicrophoneChunk(sessionB, chunk);
+        }
+    }
+  }
+
+  /// Routes the headset microphone, which belongs to speaker A. The headset
+  /// stream is unguarded: the headset earpiece is acoustically isolated from
+  /// its own microphone.
+  void _routeHeadsetChunk(Uint8List chunk) {
+    if (!isListening) {
+      return;
+    }
+    final LiveTranslationSession? session = _sessions[SpeakerSide.a];
+    if (session?.isReady != true) {
+      return;
+    }
+    final SpeechGateDecision decision = _headsetDetector.add(chunk);
+    switch (decision) {
+      case SpeechGateDecision.hold:
+        _microphoneChunksHeld += 1;
+        _headsetSpeechStreak = 0;
+      case SpeechGateDecision.finalize:
+        _microphoneChunksHeld += 1;
+        _utterancesDetected += 1;
+        _headsetSpeechStreak = 0;
+      case SpeechGateDecision.forward:
+        if (_activeSpeaker != SpeakerSide.a) {
+          _headsetSpeechStreak += 1;
+          if (_headsetSpeechStreak >= autoDirectionSpeechChunks) {
+            _headsetSpeechStreak = 0;
+            _autoSwitchSpeaker(SpeakerSide.a);
+            _sendMicrophoneChunk(session!, chunk);
+            return;
+          }
+        } else {
+          _headsetSpeechStreak = 0;
+          _sendMicrophoneChunk(session!, chunk);
+        }
+    }
+  }
+
+  /// Switches the active direction without retiring either warm session so
+  /// auto-detected speaker changes stay instant.
+  void _autoSwitchSpeaker(SpeakerSide side) {
+    if (_activeSpeaker == side) {
+      return;
+    }
+    final SpeakerSide previous = _activeSpeaker;
+    try {
+      _sessions[previous]?.endAudioStream();
+    } catch (_) {
+      // A broken transport must not prevent the direction switch.
+    }
+    _commitTurn(previous);
+    _activeSpeaker = side;
+    _autoDirectionSwitches += 1;
+    _errorMessage = null;
+    unawaited(_flushPlayback());
+    unawaited(_ensureSession(side).catchError((Object _) {}));
+    notifyListeners();
   }
 
   void _sendMicrophoneChunk(LiveTranslationSession session, Uint8List chunk) {
@@ -815,7 +997,11 @@ class ConversationController extends ChangeNotifier {
               // so replay audio cannot leak into the new response.
               unawaited(_flushPlayback());
             }
-            _queuePlayback(bytes);
+            if (isHeadsetMode) {
+              _queueTrackPlayback(side, bytes);
+            } else {
+              _queuePlayback(bytes);
+            }
           }
           if (phaseChanged) {
             notifyListeners();
@@ -888,7 +1074,7 @@ class ConversationController extends ChangeNotifier {
             notifyListeners();
           }
         }
-      case LiveResumptionHandle() || LiveGoAway():
+      case LiveResumptionHandle() || LiveGoAway() || LiveCompressionUpdate():
         break;
     }
   }
@@ -919,6 +1105,33 @@ class ConversationController extends ChangeNotifier {
           echoGuardMicrosForRoute(_activeOutputRoute);
     }
     _appendPlayback(() => _playback.enqueue(bytes));
+  }
+
+  /// Headset-split playback: speaker A's translation goes to the phone
+  /// speaker (for B) and speaker B's translation goes to the headset (for A).
+  /// Only the phone-speaker lane feeds the echo-guard schedule, because it is
+  /// the one the built-in microphone can hear.
+  void _queueTrackPlayback(SpeakerSide side, Uint8List bytes) {
+    final PlaybackTrack track = side == SpeakerSide.a
+        ? PlaybackTrack.phoneSpeaker
+        : PlaybackTrack.headset;
+    _appendPlayback(() => _playback.enqueueTrack(track, bytes));
+    if (track == PlaybackTrack.phoneSpeaker) {
+      final int durationMicros =
+          bytes.length *
+          Duration.microsecondsPerSecond ~/
+          (outputSampleRateHz * bytesPerSample);
+      final int now = _monotonicMicros();
+      final int playbackStart = math.max(now, _scheduledPlaybackEndMicros);
+      _scheduledPlaybackEndMicros = playbackStart + durationMicros;
+      _maximumScheduledPlaybackMicros = math.max(
+        _maximumScheduledPlaybackMicros,
+        _scheduledPlaybackEndMicros - now,
+      );
+      _captureBlockedUntilMicros =
+          _scheduledPlaybackEndMicros +
+          echoGuardMicrosForRoute(_activeOutputRoute);
+    }
   }
 
   void _appendPlayback(Future<void> Function() operation) {
@@ -1148,12 +1361,38 @@ class ConversationController extends ChangeNotifier {
     if (_mode == mode || _disposed) {
       return;
     }
+    final bool captureLayoutChanges =
+        mode == ConversationMode.headsetSplit ||
+        _mode == ConversationMode.headsetSplit;
+    if (captureLayoutChanges && (isListening || _stopOperation != null)) {
+      unawaited(stopConversation());
+    }
     _mode = mode;
     _errorMessage = null;
+    if (mode == ConversationMode.headsetSplit) {
+      unawaited(_refreshHeadsetState());
+    }
     notifyListeners();
   }
 
+  Future<void> _refreshHeadsetState() async {
+    try {
+      final HeadsetCaptureState state = await _headsetCapture.state();
+      if (_disposed || _mode != ConversationMode.headsetSplit) {
+        return;
+      }
+      _headsetState = state;
+      notifyListeners();
+    } catch (_) {
+      _headsetState = HeadsetCaptureState.unavailable;
+    }
+  }
+
   Future<void> selectSpeaker(SpeakerSide side) async {
+    if (isHeadsetMode) {
+      // Direction is detected automatically in headset-split mode.
+      return;
+    }
     if (_replayingTurnId != null || _replayOperation != null) {
       await stopReplay();
     }
@@ -1536,13 +1775,18 @@ class ConversationController extends ChangeNotifier {
     final StreamSubscription<Uint8List>? captureSubscription =
         _captureSubscription;
     _captureSubscription = null;
+    final StreamSubscription<Uint8List>? headsetSubscription =
+        _headsetSubscription;
+    _headsetSubscription = null;
 
     // Start independent cleanup owners together. Playback dispose is the
     // authoritative native stop/flush/release path and intentionally bypasses
     // an old serialized enqueue chain that may never complete.
     await Future.wait(<Future<void>>[
       _cancelSubscriptionBestEffort(captureSubscription),
+      _cancelSubscriptionBestEffort(headsetSubscription),
       _runAuthoritativeCleanup(_audioCapture.stop),
+      _runAuthoritativeCleanup(_headsetCapture.stop),
       _closeSessionsBestEffort(),
       _runAuthoritativeCleanup(_releasePlayback),
     ]);
@@ -1809,6 +2053,8 @@ class ConversationController extends ChangeNotifier {
       microphoneChunksHeld: _microphoneChunksHeld,
       utterancesDetected: _utterancesDetected,
       bargeIns: _bargeIns,
+      autoDirectionSwitches: _autoDirectionSwitches,
+      headsetState: _headsetState.name,
       outputAudioChunks: _outputAudioChunks,
       outputAudioBytes: _outputAudioBytes,
       completedTurns: _diagnosticCompletedTurns,
@@ -1848,6 +2094,9 @@ class ConversationController extends ChangeNotifier {
     _microphoneChunksHeld = 0;
     _utterancesDetected = 0;
     _bargeIns = 0;
+    _autoDirectionSwitches = 0;
+    _phoneSpeechStreak = 0;
+    _headsetSpeechStreak = 0;
     _outputAudioChunks = 0;
     _outputAudioBytes = 0;
     _diagnosticCompletedTurns = 0;
@@ -1925,7 +2174,15 @@ class ConversationController extends ChangeNotifier {
     } finally {
       _captureSubscription = null;
     }
+    try {
+      await _headsetSubscription?.cancel();
+    } catch (_) {
+      // Continue releasing the remaining resources.
+    } finally {
+      _headsetSubscription = null;
+    }
     await _runAuthoritativeCleanup(_audioCapture.dispose);
+    await _runAuthoritativeCleanup(_headsetCapture.dispose);
     await _closeSessionsBestEffort();
     await _runCleanupBestEffort(_flushPlayback);
     await _runAuthoritativeCleanup(_releasePlayback);

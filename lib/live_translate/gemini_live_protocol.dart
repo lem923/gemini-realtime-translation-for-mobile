@@ -16,7 +16,15 @@ class GeminiLiveProtocol {
   static String setupMessage({
     required String targetLanguageCode,
     String? resumptionHandle,
+    int? slidingWindowTargetTokens,
+    int? compressionTriggerTokens,
   }) {
+    final Map<String, Object?> compression = <String, Object?>{
+      'slidingWindow': <String, Object?>{
+        'targetTokens': ?slidingWindowTargetTokens,
+      },
+      'triggerTokens': ?compressionTriggerTokens,
+    };
     final Map<String, Object?> setup = <String, Object?>{
       'model': 'models/$model',
       'generationConfig': <String, Object?>{
@@ -37,9 +45,7 @@ class GeminiLiveProtocol {
           'silenceDurationMs': 500,
         },
       },
-      'contextWindowCompression': <String, Object?>{
-        'slidingWindow': <String, Object?>{},
-      },
+      'contextWindowCompression': compression,
     };
     if (resumptionHandle != null) {
       setup['sessionResumption'] = <String, Object?>{
@@ -93,6 +99,12 @@ class GeminiLiveProtocol {
     }
     if (message.containsKey('goAway')) {
       events.add(const LiveGoAway());
+    }
+    final Map<String, Object?>? compressionUpdate = _map(
+      message['contextWindowCompressionUpdate'],
+    );
+    if (compressionUpdate != null) {
+      events.add(LiveCompressionUpdate(compressionUpdate));
     }
 
     final Map<String, Object?>? error = _map(message['error']);

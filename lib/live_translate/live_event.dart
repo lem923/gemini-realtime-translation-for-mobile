@@ -50,6 +50,11 @@ class LiveResumptionHandle extends LiveEvent {
   final String handle;
 }
 
+class LiveCompressionUpdate extends LiveEvent {
+  const LiveCompressionUpdate(this.payload);
+  final Map<String, Object?> payload;
+}
+
 class LiveGoAway extends LiveEvent {
   const LiveGoAway();
 }

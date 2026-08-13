@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../audio/headset_capture_gateway.dart';
 import '../conversation/conversation_controller.dart';
 import '../conversation/conversation_diagnostics.dart';
 import '../conversation/conversation_models.dart';
@@ -204,6 +205,14 @@ class _ModeSelector extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ColorScheme colors = Theme.of(context).colorScheme;
+    final bool headsetMode = controller.mode == ConversationMode.headsetSplit;
+    final String hint = headsetMode
+        ? controller.headsetState == HeadsetCaptureState.available
+              ? '耳机分离：耳机麦克风采集佩戴者，手机麦克风采集对方，自动切换方向'
+              : '耳机分离：需要连接带麦克风的耳机'
+        : controller.mode == ConversationMode.simultaneous
+        ? '同声传译：麦克风在译文播放时保持开启，适合耳机使用'
+        : '逐句翻译：播放译文时保护麦克风，适合外放面对面使用';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
@@ -219,6 +228,11 @@ class _ModeSelector extends StatelessWidget {
                 value: ConversationMode.simultaneous,
                 label: Text('同声传译'),
                 tooltip: '边说边听，译文随讲随播，建议佩戴耳机',
+              ),
+              ButtonSegment<ConversationMode>(
+                value: ConversationMode.headsetSplit,
+                label: Text('耳机分离'),
+                tooltip: '耳机麦克风与手机麦克风分侧采集，自动切换方向',
               ),
             ],
             selected: <ConversationMode>{controller.mode},
@@ -242,9 +256,7 @@ class _ModeSelector extends StatelessWidget {
         const SizedBox(height: 7),
         if (showHint)
           Text(
-            controller.mode == ConversationMode.simultaneous
-                ? '同声传译：麦克风在译文播放时保持开启，适合耳机使用'
-                : '逐句翻译：播放译文时保护麦克风，适合外放面对面使用',
+            hint,
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
             textAlign: TextAlign.center,

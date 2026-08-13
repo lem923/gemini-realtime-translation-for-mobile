@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:realtime_translation/audio/audio_capture_gateway.dart';
+import 'package:realtime_translation/audio/headset_capture_gateway.dart';
 import 'package:realtime_translation/audio/pcm_playback_gateway.dart';
 import 'package:realtime_translation/conversation/conversation_controller.dart';
 import 'package:realtime_translation/conversation/conversation_models.dart';
@@ -21,6 +22,7 @@ void main() {
       keyStore: _StoredKeyStore(),
       audioCapture: _NoopAudioCapture(),
       playback: _NoopPlayback(),
+      headsetCapture: _NoopHeadsetCapture(),
       sessionFactory:
           ({required String apiKey, required String targetLanguageCode}) =>
               _NoopLiveSession(),
@@ -65,6 +67,7 @@ void main() {
       keyStore: _StoredKeyStore(),
       audioCapture: _NoopAudioCapture(),
       playback: _NoopPlayback(),
+      headsetCapture: _NoopHeadsetCapture(),
       sessionFactory:
           ({required String apiKey, required String targetLanguageCode}) =>
               _NoopLiveSession(),
@@ -100,6 +103,7 @@ void main() {
       keyStore: _StoredKeyStore(),
       audioCapture: _NoopAudioCapture(),
       playback: _NoopPlayback(),
+      headsetCapture: _NoopHeadsetCapture(),
       sessionFactory:
           ({required String apiKey, required String targetLanguageCode}) =>
               _NoopLiveSession(),
@@ -133,6 +137,7 @@ void main() {
       keyStore: _StoredKeyStore(),
       audioCapture: _NoopAudioCapture(),
       playback: _NoopPlayback(),
+      headsetCapture: _NoopHeadsetCapture(),
       sessionFactory:
           ({required String apiKey, required String targetLanguageCode}) =>
               session,
@@ -196,6 +201,7 @@ void main() {
         keyStore: _StoredKeyStore(),
         audioCapture: _NoopAudioCapture(),
         playback: _NoopPlayback(),
+        headsetCapture: _NoopHeadsetCapture(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) =>
                 session,
@@ -243,6 +249,7 @@ void main() {
         keyStore: store,
         audioCapture: _NoopAudioCapture(),
         playback: _NoopPlayback(),
+        headsetCapture: _NoopHeadsetCapture(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
               requestedKeys.add(apiKey);
@@ -306,6 +313,7 @@ void main() {
         keyStore: _StoredKeyStore(),
         audioCapture: _NoopAudioCapture(),
         playback: _NoopPlayback(),
+        headsetCapture: _NoopHeadsetCapture(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
               final _NoopLiveSession session = _NoopLiveSession();
@@ -402,6 +410,7 @@ void main() {
       keyStore: _StoredKeyStore(),
       audioCapture: _NoopAudioCapture(),
       playback: _NoopPlayback(),
+      headsetCapture: _NoopHeadsetCapture(),
       sessionFactory:
           ({required String apiKey, required String targetLanguageCode}) {
             final _NoopLiveSession session = _NoopLiveSession();
@@ -480,6 +489,7 @@ void main() {
       keyStore: _StoredKeyStore(),
       audioCapture: _NoopAudioCapture(),
       playback: _NoopPlayback(),
+      headsetCapture: _NoopHeadsetCapture(),
       permissionGateway: permissions,
       sessionFactory:
           ({required String apiKey, required String targetLanguageCode}) =>
@@ -528,6 +538,7 @@ void main() {
       keyStore: _StoredKeyStore(),
       audioCapture: _NoopAudioCapture(),
       playback: _NoopPlayback(),
+      headsetCapture: _NoopHeadsetCapture(),
       sessionFactory:
           ({required String apiKey, required String targetLanguageCode}) {
             final _NoopLiveSession session = _NoopLiveSession();
@@ -578,6 +589,7 @@ void main() {
       keyStore: _StoredKeyStore(),
       audioCapture: _NoopAudioCapture(),
       playback: _NoopPlayback(),
+      headsetCapture: _NoopHeadsetCapture(),
       sessionFactory:
           ({required String apiKey, required String targetLanguageCode}) =>
               _NoopLiveSession(),
@@ -812,6 +824,7 @@ ConversationController _buildController() {
     keyStore: _StoredKeyStore(),
     audioCapture: _NoopAudioCapture(),
     playback: _NoopPlayback(),
+    headsetCapture: _NoopHeadsetCapture(),
     sessionFactory:
         ({required String apiKey, required String targetLanguageCode}) =>
             _NoopLiveSession(),
@@ -864,6 +877,28 @@ class _StoredKeyStore implements ApiKeyStore {
 
   @override
   Future<void> write(String value) async => this.value = value;
+}
+
+class _NoopHeadsetCapture implements HeadsetCaptureGateway {
+  final StreamController<Uint8List> _chunks =
+      StreamController<Uint8List>.broadcast();
+  HeadsetCaptureState stateValue = HeadsetCaptureState.unavailable;
+
+  @override
+  Future<HeadsetCaptureState> state() async => stateValue;
+
+  @override
+  Future<Stream<Uint8List>> start() async => _chunks.stream;
+
+  @override
+  Future<void> stop() async {}
+
+  @override
+  Future<void> dispose() async {
+    if (!_chunks.isClosed) {
+      await _chunks.close();
+    }
+  }
 }
 
 class _NoopAudioCapture implements AudioCaptureGateway {
@@ -925,7 +960,14 @@ class _NoopPlayback implements PcmPlaybackGateway {
   Future<void> enqueue(Uint8List pcm) async => enqueued.add(pcm.toList());
 
   @override
+  Future<void> enqueueTrack(PlaybackTrack track, Uint8List pcm) async =>
+      enqueued.add(pcm.toList());
+
+  @override
   Future<void> flush() async {}
+
+  @override
+  Future<void> flushTrack(PlaybackTrack track) async {}
 
   @override
   Future<PcmPlaybackMetrics> metrics() async =>

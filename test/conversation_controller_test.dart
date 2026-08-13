@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:realtime_translation/audio/audio_capture_gateway.dart';
 import 'package:realtime_translation/audio/audio_constants.dart';
+import 'package:realtime_translation/audio/headset_capture_gateway.dart';
 import 'package:realtime_translation/audio/pcm_playback_gateway.dart';
 import 'package:realtime_translation/conversation/conversation_controller.dart';
 import 'package:realtime_translation/conversation/conversation_diagnostics.dart';
@@ -60,6 +61,7 @@ void main() {
         keyStore: store,
         audioCapture: _FakeAudioCapture(),
         playback: _FakePlayback(),
+        headsetCapture: _FakeHeadsetCapture(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
               probe = _FakeLiveSession(
@@ -94,6 +96,7 @@ void main() {
         keyStore: store,
         audioCapture: _FakeAudioCapture(),
         playback: _FakePlayback(),
+        headsetCapture: _FakeHeadsetCapture(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) =>
                 _FakeLiveSession(),
@@ -126,6 +129,7 @@ void main() {
         keyStore: store,
         audioCapture: _FakeAudioCapture(),
         playback: _FakePlayback(),
+        headsetCapture: _FakeHeadsetCapture(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) =>
                 _FakeLiveSession(),
@@ -159,6 +163,7 @@ void main() {
         keyStore: store,
         audioCapture: _FakeAudioCapture(),
         playback: _FakePlayback(),
+        headsetCapture: _FakeHeadsetCapture(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) =>
                 _FakeLiveSession(),
@@ -245,6 +250,7 @@ void main() {
         languagePairStore: _MemoryLanguagePairStore(pair),
         audioCapture: _FakeAudioCapture(),
         playback: _FakePlayback(),
+        headsetCapture: _FakeHeadsetCapture(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) =>
                 _FakeLiveSession(),
@@ -265,6 +271,7 @@ void main() {
         keyStore: _MemoryKeyStore('stored-key'),
         audioCapture: capture,
         playback: _FakePlayback(),
+        headsetCapture: _FakeHeadsetCapture(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) =>
                 _FakeLiveSession(),
@@ -355,6 +362,7 @@ void main() {
         keyStore: _MemoryKeyStore('stored-key'),
         audioCapture: capture,
         playback: _FakePlayback(),
+        headsetCapture: _FakeHeadsetCapture(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) =>
                 _FakeLiveSession(
@@ -387,6 +395,7 @@ void main() {
         keyStore: _MemoryKeyStore('stored-key'),
         audioCapture: capture,
         playback: _FakePlayback(),
+        headsetCapture: _FakeHeadsetCapture(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) =>
                 _FakeLiveSession(
@@ -421,6 +430,7 @@ void main() {
         keyStore: _MemoryKeyStore('stored-key'),
         audioCapture: capture,
         playback: playback,
+        headsetCapture: _FakeHeadsetCapture(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
               final _FakeLiveSession session = _FakeLiveSession();
@@ -479,6 +489,7 @@ void main() {
         keyStore: _MemoryKeyStore('stored-key'),
         audioCapture: capture,
         playback: playback,
+        headsetCapture: _FakeHeadsetCapture(),
         monotonicMicros: () => nowMicros,
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
@@ -517,6 +528,7 @@ void main() {
         keyStore: _MemoryKeyStore('stored-key'),
         audioCapture: capture,
         playback: playback,
+        headsetCapture: _FakeHeadsetCapture(),
         monotonicMicros: () => nowMicros,
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
@@ -554,6 +566,7 @@ void main() {
         keyStore: _MemoryKeyStore('stored-key'),
         audioCapture: capture,
         playback: playback,
+        headsetCapture: _FakeHeadsetCapture(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
               final _FakeLiveSession session = _FakeLiveSession();
@@ -594,6 +607,7 @@ void main() {
         keyStore: _MemoryKeyStore('stored-key'),
         audioCapture: _FakeAudioCapture(),
         playback: _FakePlayback(),
+        headsetCapture: _FakeHeadsetCapture(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
               final _FakeLiveSession session = _FakeLiveSession();
@@ -772,6 +786,7 @@ void main() {
         keyStore: _MemoryKeyStore('stored-key'),
         audioCapture: capture,
         playback: playback,
+        headsetCapture: _FakeHeadsetCapture(),
         monotonicMicros: () => nowMicros,
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
@@ -811,6 +826,7 @@ void main() {
         keyStore: _MemoryKeyStore('stored-key'),
         audioCapture: _FakeAudioCapture(),
         playback: playback,
+        headsetCapture: _FakeHeadsetCapture(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
               final _FakeLiveSession session = _FakeLiveSession();
@@ -879,6 +895,7 @@ void main() {
         keyStore: _MemoryKeyStore('stored-key'),
         audioCapture: _FakeAudioCapture(),
         playback: playback,
+        headsetCapture: _FakeHeadsetCapture(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
               final _FakeLiveSession session = _FakeLiveSession();
@@ -909,6 +926,7 @@ void main() {
         keyStore: _MemoryKeyStore('stored-key'),
         audioCapture: _FakeAudioCapture(),
         playback: playback,
+        headsetCapture: _FakeHeadsetCapture(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) =>
                 _FakeLiveSession(),
@@ -1045,6 +1063,7 @@ void main() {
         keyStore: _MemoryKeyStore('stored-key'),
         audioCapture: capture,
         playback: playback,
+        headsetCapture: _FakeHeadsetCapture(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
               final _FakeLiveSession session = _FakeLiveSession();
@@ -1087,6 +1106,7 @@ void main() {
         keyStore: _MemoryKeyStore('stored-key'),
         audioCapture: _FakeAudioCapture(),
         playback: playback,
+        headsetCapture: _FakeHeadsetCapture(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
               final _FakeLiveSession session = _FakeLiveSession();
@@ -1136,6 +1156,7 @@ void main() {
         keyStore: _MemoryKeyStore('stored-key'),
         audioCapture: capture,
         playback: playback,
+        headsetCapture: _FakeHeadsetCapture(),
         monotonicMicros: () => nowMicros,
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
@@ -1182,6 +1203,7 @@ void main() {
         keyStore: _MemoryKeyStore('stored-key'),
         audioCapture: _FakeAudioCapture(),
         playback: playback,
+        headsetCapture: _FakeHeadsetCapture(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
               final _FakeLiveSession session = _FakeLiveSession();
@@ -1329,6 +1351,7 @@ void main() {
         keyStore: _MemoryKeyStore('stored-key'),
         audioCapture: capture,
         playback: _FakePlayback(),
+        headsetCapture: _FakeHeadsetCapture(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
               final _FakeLiveSession session = _FakeLiveSession(
@@ -1436,6 +1459,7 @@ void main() {
         keyStore: _MemoryKeyStore('stored-key'),
         audioCapture: _FakeAudioCapture(),
         playback: playback,
+        headsetCapture: _FakeHeadsetCapture(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
               final _FakeLiveSession session = _FakeLiveSession(
@@ -1479,6 +1503,7 @@ void main() {
         keyStore: _MemoryKeyStore('stored-key'),
         audioCapture: _FakeAudioCapture(),
         playback: _FakePlayback(),
+        headsetCapture: _FakeHeadsetCapture(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
               final _FakeLiveSession session = _FakeLiveSession();
@@ -1524,6 +1549,7 @@ void main() {
         keyStore: store,
         audioCapture: capture,
         playback: playback,
+        headsetCapture: _FakeHeadsetCapture(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
               requestedKeys.add(apiKey);
@@ -1683,6 +1709,7 @@ void main() {
         keyStore: _MemoryKeyStore('stored-key'),
         audioCapture: capture,
         playback: _FakePlayback(),
+        headsetCapture: _FakeHeadsetCapture(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
               final _FakeLiveSession session = _FakeLiveSession();
@@ -1824,6 +1851,7 @@ void main() {
         keyStore: _MemoryKeyStore('stored-key'),
         audioCapture: capture,
         playback: _FakePlayback(),
+        headsetCapture: _FakeHeadsetCapture(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
               final _FakeLiveSession session = _FakeLiveSession();
@@ -1860,6 +1888,7 @@ void main() {
         keyStore: _MemoryKeyStore('stored-key'),
         audioCapture: capture,
         playback: _FakePlayback(),
+        headsetCapture: _FakeHeadsetCapture(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
               final _FakeLiveSession session = _FakeLiveSession();
@@ -1901,6 +1930,7 @@ void main() {
         keyStore: _MemoryKeyStore('stored-key'),
         audioCapture: capture,
         playback: playback,
+        headsetCapture: _FakeHeadsetCapture(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
               final _FakeLiveSession session = _FakeLiveSession();
@@ -1941,6 +1971,7 @@ void main() {
         keyStore: _MemoryKeyStore('stored-key'),
         audioCapture: capture,
         playback: _FakePlayback(),
+        headsetCapture: _FakeHeadsetCapture(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
               final _FakeLiveSession session = _FakeLiveSession();
@@ -1965,7 +1996,7 @@ void main() {
       await _flushEvents();
       expect(sessions.first.audio, hasLength(2));
 
-      for (int i = 0; i < 6; i += 1) {
+      for (int i = 0; i < 15; i += 1) {
         capture.emit(_silenceChunk());
       }
       await _flushEvents();
@@ -1974,11 +2005,11 @@ void main() {
       capture.emit(_speechChunk());
       capture.emit(_speechChunk());
       await _flushEvents();
-      expect(sessions.first.audio, hasLength(9));
+      expect(sessions.first.audio, hasLength(18));
 
       final ConversationDiagnostics diagnostics = await controller
           .collectDiagnostics();
-      expect(diagnostics.microphoneChunksSent, 9);
+      expect(diagnostics.microphoneChunksSent, 18);
       expect(diagnostics.microphoneChunksHeld, 6);
       expect(diagnostics.utterancesDetected, 1);
 
@@ -1998,6 +2029,7 @@ void main() {
         keyStore: _MemoryKeyStore('stored-key'),
         audioCapture: capture,
         playback: playback,
+        headsetCapture: _FakeHeadsetCapture(),
         monotonicMicros: () => nowMicros,
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
@@ -2053,6 +2085,7 @@ void main() {
         keyStore: _MemoryKeyStore('stored-key'),
         audioCapture: capture,
         playback: playback,
+        headsetCapture: _FakeHeadsetCapture(),
         monotonicMicros: () => nowMicros,
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
@@ -2095,6 +2128,7 @@ void main() {
         keyStore: _MemoryKeyStore('stored-key'),
         audioCapture: capture,
         playback: _FakePlayback(),
+        headsetCapture: _FakeHeadsetCapture(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
               final _FakeLiveSession session = _FakeLiveSession();
@@ -2110,12 +2144,12 @@ void main() {
 
       capture.emit(_speechChunk());
       capture.emit(_speechChunk());
-      for (int i = 0; i < 6; i += 1) {
+      for (int i = 0; i < 15; i += 1) {
         capture.emit(_silenceChunk());
       }
       await _flushEvents();
       expect(sessions.first.endAudioStreamCount, 0);
-      expect(sessions.first.audio, hasLength(7));
+      expect(sessions.first.audio, hasLength(16));
 
       final ConversationDiagnostics diagnostics = await controller
           .collectDiagnostics();
@@ -2128,6 +2162,128 @@ void main() {
   );
 
   test(
+    'headset mode fails closed when no headset microphone is present',
+    () async {
+      final _FakeHeadsetCapture headset = _FakeHeadsetCapture()
+        ..stateValue = HeadsetCaptureState.unavailable;
+      final ConversationController controller = ConversationController(
+        keyStore: _MemoryKeyStore('stored-key'),
+        audioCapture: _FakeAudioCapture(),
+        playback: _FakePlayback(),
+        headsetCapture: headset,
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) =>
+                _FakeLiveSession(),
+      );
+
+      await controller.initialize();
+      controller.setMode(ConversationMode.headsetSplit);
+      await _flushEvents();
+      await controller.startConversation();
+      await _flushEvents();
+
+      expect(controller.phase, ConversationPhase.failed);
+      expect(controller.errorMessage, contains('未检测到耳机'));
+      expect(headset.started, isFalse);
+      controller.dispose();
+    },
+  );
+
+  test(
+    'headset mode auto-switches direction between the two microphones',
+    () async {
+      final _FakeAudioCapture capture = _FakeAudioCapture();
+      final _FakeHeadsetCapture headset = _FakeHeadsetCapture()
+        ..stateValue = HeadsetCaptureState.available;
+      final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
+      final ConversationController controller = ConversationController(
+        keyStore: _MemoryKeyStore('stored-key'),
+        audioCapture: capture,
+        playback: _FakePlayback(),
+        headsetCapture: headset,
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) {
+              final _FakeLiveSession session = _FakeLiveSession();
+              sessions.add(session);
+              return session;
+            },
+      );
+
+      await controller.initialize();
+      controller.setMode(ConversationMode.headsetSplit);
+      await _flushEvents();
+      await controller.startConversation();
+      await _flushEvents();
+      expect(headset.started, isTrue);
+
+      capture.emit(_speechChunk());
+      await _flushEvents();
+      expect(controller.activeSpeaker, SpeakerSide.a);
+      expect(sessions[1].audio, isEmpty);
+
+      capture.emit(_speechChunk());
+      await _flushEvents();
+      expect(controller.activeSpeaker, SpeakerSide.b);
+      expect(sessions[1].audio, hasLength(1));
+      expect(sessions[0].endAudioStreamCount, 1);
+
+      headset.emit(_speechChunk());
+      headset.emit(_speechChunk());
+      await _flushEvents();
+      expect(controller.activeSpeaker, SpeakerSide.a);
+      expect(sessions[0].audio, hasLength(1));
+
+      final ConversationDiagnostics diagnostics = await controller
+          .collectDiagnostics();
+      expect(diagnostics.autoDirectionSwitches, 2);
+
+      await controller.stopConversation();
+      controller.dispose();
+    },
+  );
+
+  test('headset mode routes each side to its own playback track', () async {
+    final _FakeAudioCapture capture = _FakeAudioCapture();
+    final _FakeHeadsetCapture headset = _FakeHeadsetCapture()
+      ..stateValue = HeadsetCaptureState.available;
+    final _FakePlayback playback = _FakePlayback();
+    final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
+    final ConversationController controller = ConversationController(
+      keyStore: _MemoryKeyStore('stored-key'),
+      audioCapture: capture,
+      playback: playback,
+      headsetCapture: headset,
+      sessionFactory:
+          ({required String apiKey, required String targetLanguageCode}) {
+            final _FakeLiveSession session = _FakeLiveSession();
+            sessions.add(session);
+            return session;
+          },
+    );
+
+    await controller.initialize();
+    controller.setMode(ConversationMode.headsetSplit);
+    await _flushEvents();
+    await controller.startConversation();
+    await _flushEvents();
+
+    sessions[0].emit(LiveAudioChunk(Uint8List(4800)));
+    await _flushEvents();
+    expect(playback.operations, contains('enqueueTrack:phoneSpeaker'));
+
+    capture.emit(_speechChunk());
+    capture.emit(_speechChunk());
+    await _flushEvents();
+    expect(controller.activeSpeaker, SpeakerSide.b);
+    sessions[1].emit(LiveAudioChunk(Uint8List(4800)));
+    await _flushEvents();
+    expect(playback.operations, contains('enqueueTrack:headset'));
+
+    await controller.stopConversation();
+    controller.dispose();
+  });
+
+  test(
     'capture startup failure closes the already connected session',
     () async {
       final _FakeAudioCapture capture = _FakeAudioCapture(
@@ -2138,6 +2294,7 @@ void main() {
         keyStore: _MemoryKeyStore('stored-key'),
         audioCapture: capture,
         playback: _FakePlayback(),
+        headsetCapture: _FakeHeadsetCapture(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
               final _FakeLiveSession session = _FakeLiveSession();
@@ -2168,6 +2325,7 @@ void main() {
         keyStore: _MemoryKeyStore('stored-key'),
         audioCapture: capture,
         playback: _FakePlayback(),
+        headsetCapture: _FakeHeadsetCapture(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
               final _FakeLiveSession session = _FakeLiveSession(
@@ -2505,6 +2663,35 @@ class _MemoryLanguagePairStore implements LanguagePairStore {
   }
 }
 
+class _FakeHeadsetCapture implements HeadsetCaptureGateway {
+  HeadsetCaptureState stateValue = HeadsetCaptureState.unavailable;
+  final StreamController<Uint8List> _chunks =
+      StreamController<Uint8List>.broadcast(sync: true);
+  bool started = false;
+  bool stopped = false;
+
+  void emit(List<int> bytes) => _chunks.add(Uint8List.fromList(bytes));
+
+  @override
+  Future<HeadsetCaptureState> state() async => stateValue;
+
+  @override
+  Future<Stream<Uint8List>> start() async {
+    started = true;
+    return _chunks.stream;
+  }
+
+  @override
+  Future<void> stop() async => stopped = true;
+
+  @override
+  Future<void> dispose() async {
+    if (!_chunks.isClosed) {
+      await _chunks.close();
+    }
+  }
+}
+
 class _FakeAudioCapture implements AudioCaptureGateway {
   _FakeAudioCapture({this.permission = true, this.startError});
 
@@ -2639,6 +2826,17 @@ class _FakePlayback implements PcmPlaybackGateway {
       throw StateError('playback failed');
     }
     await enqueueGate?.future;
+  }
+
+  @override
+  Future<void> enqueueTrack(PlaybackTrack track, Uint8List pcm) async {
+    operations.add('enqueueTrack:${track.name}');
+    enqueued.add(pcm.toList());
+  }
+
+  @override
+  Future<void> flushTrack(PlaybackTrack track) async {
+    operations.add('flushTrack:${track.name}');
   }
 
   @override

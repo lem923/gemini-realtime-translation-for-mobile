@@ -23,12 +23,13 @@ enum SpeechGateDecision {
 /// [absoluteMinimumEnergy]. Holding silence and ambient noise prevents the
 /// server from translating it continuously, so playback stays bounded and the
 /// next utterance can start; the session maps [finalize] to the server's
-/// `audioStreamEnd` turn boundary.
+/// `audioStreamEnd` turn boundary. A 1.5 s silence tail (15 chunks) is
+/// required before an utterance is considered finished.
 class SpeechActivityDetector {
   SpeechActivityDetector({
     this.chunkSizeBytes = inputChunkBytes,
     this.speechChunksToStartUtterance = 2,
-    this.silenceChunksToEndUtterance = 6,
+    this.silenceChunksToEndUtterance = 15,
     this.minimumUtteranceChunks = 3,
     this.noiseFloorLearningRate = 0.1,
     this.enterSpeechRatio = 64.0,

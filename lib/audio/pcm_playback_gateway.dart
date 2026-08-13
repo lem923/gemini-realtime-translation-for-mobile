@@ -14,6 +14,9 @@ enum AudioOutputRoute {
   hdmi,
 }
 
+/// Physical destination for translated audio in headset-split mode.
+enum PlaybackTrack { phoneSpeaker, headset }
+
 sealed class PcmPlaybackEvent {
   const PcmPlaybackEvent();
 }
@@ -141,7 +144,9 @@ abstract interface class PcmPlaybackGateway {
   Stream<PcmPlaybackEvent> get events;
   Future<void> configure({required int clientGeneration});
   Future<void> enqueue(Uint8List pcm);
+  Future<void> enqueueTrack(PlaybackTrack track, Uint8List pcm);
   Future<void> flush();
+  Future<void> flushTrack(PlaybackTrack track);
   Future<PcmPlaybackMetrics> metrics();
   Future<void> dispose();
 }
@@ -174,7 +179,18 @@ class PlatformPcmPlaybackGateway implements PcmPlaybackGateway {
       _channel.invokeMethod<void>('enqueue', pcm);
 
   @override
+  Future<void> enqueueTrack(PlaybackTrack track, Uint8List pcm) =>
+      _channel.invokeMethod<void>('enqueueTrack', <String, Object>{
+        'track': track.name,
+        'pcm': pcm,
+      });
+
+  @override
   Future<void> flush() => _channel.invokeMethod<void>('flush');
+
+  @override
+  Future<void> flushTrack(PlaybackTrack track) =>
+      _channel.invokeMethod<void>('flushTrack', track.name);
 
   @override
   Future<PcmPlaybackMetrics> metrics() async {

@@ -29,6 +29,8 @@ class GeminiLiveSession implements LiveTranslationSession {
   GeminiLiveSession({
     required this.apiKey,
     required this.targetLanguageCode,
+    this.slidingWindowTargetTokens,
+    this.compressionTriggerTokens,
     Uri? endpoint,
     HttpClient Function()? httpClientFactory,
     WebSocketChannel Function(Uri uri, HttpClient client)? channelFactory,
@@ -50,6 +52,8 @@ class GeminiLiveSession implements LiveTranslationSession {
 
   final String apiKey;
   final String targetLanguageCode;
+  final int? slidingWindowTargetTokens;
+  final int? compressionTriggerTokens;
   final Uri endpoint;
   final HttpClient Function() _httpClientFactory;
   final WebSocketChannel Function(Uri uri, HttpClient client) _channelFactory;
@@ -143,6 +147,8 @@ class GeminiLiveSession implements LiveTranslationSession {
         GeminiLiveProtocol.setupMessage(
           targetLanguageCode: targetLanguageCode,
           resumptionHandle: _resumptionHandle,
+          slidingWindowTargetTokens: slidingWindowTargetTokens,
+          compressionTriggerTokens: compressionTriggerTokens,
         ),
       );
       await setupFuture.timeout(const Duration(seconds: 15));

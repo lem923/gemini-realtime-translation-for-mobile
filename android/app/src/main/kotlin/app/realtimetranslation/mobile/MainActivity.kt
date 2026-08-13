@@ -27,6 +27,7 @@ import kotlin.math.max
 
 class MainActivity : FlutterActivity() {
     private var player: PcmStreamPlayer? = null
+    private var headsetMicCapture: HeadsetMicCapture? = null
     private var audioEventSink: EventChannel.EventSink? = null
     private var permissionEventSink: EventChannel.EventSink? = null
     private val permissionHandler = Handler(Looper.getMainLooper())
@@ -162,9 +163,29 @@ class MainActivity : FlutterActivity() {
                             result.success(null)
                         }
                     }
+                    "enqueueTrack" -> {
+                        val arguments = call.arguments as? Map<*, *>
+                        val bytes = arguments?.get("pcm") as? ByteArray
+                        val trackName = arguments?.get("track") as? String
+                        if (bytes == null || trackName == null) {
+                            result.error("invalid_audio", "Track or PCM payload is missing", null)
+                        } else {
+                            pcmPlayer.enqueueTrack(trackName, bytes)
+                            result.success(null)
+                        }
+                    }
                     "flush" -> {
                         pcmPlayer.flush()
                         result.success(null)
+                    }
+                    "flushTrack" -> {
+                        val trackName = call.arguments as? String
+                        if (trackName == null) {
+                            result.error("invalid_audio", "Track name is missing", null)
+                        } else {
+                            pcmPlayer.flushTrack(trackName)
+                            result.success(null)
+                        }
                     }
                     "metrics" -> result.success(pcmPlayer.metrics())
                     "dispose" -> {
@@ -177,6 +198,46 @@ class MainActivity : FlutterActivity() {
                 result.error("audio_failure", "Android audio output failed", null)
             }
         }
+        val headsetCapture = HeadsetMicCapture(
+            context = this,
+            audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager,
+        )
+        headsetMicCapture = headsetCapture
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "app.realtimetranslation/headset_capture",
+        ).setMethodCallHandler { call, result ->
+            try {
+                when (call.method) {
+                    "state" -> result.success(
+                        if (headsetCapture.isAvailable()) "available" else "unavailable",
+                    )
+                    "start" -> {
+                        headsetCapture.start()
+                        result.success(null)
+                    }
+                    "stop" -> {
+                        headsetCapture.stop()
+                        result.success(null)
+                    }
+                    else -> result.notImplemented()
+                }
+            } catch (_: Throwable) {
+                result.error("headset_capture_failure", "Headset capture failed", null)
+            }
+        }
+        EventChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "app.realtimetranslation/headset_capture_events",
+        ).setStreamHandler(object : EventChannel.StreamHandler {
+            override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+                headsetCapture.setEventSink(events)
+            }
+
+            override fun onCancel(arguments: Any?) {
+                headsetCapture.setEventSink(null)
+            }
+        })
     }
 
     override fun onDestroy() {
@@ -185,9 +246,12 @@ class MainActivity : FlutterActivity() {
             permissionEventSink = null
             val currentPlayer = player
             player = null
+            val currentHeadset = headsetMicCapture
+            headsetMicCapture = null
             BestEffortCleanup.run(
                 { permissionHandler.removeCallbacks(permissionPoll) },
                 { currentPlayer?.dispose() },
+                { currentHeadset?.stop() },
             )
         } finally {
             super.onDestroy()
@@ -274,6 +338,12 @@ private class PcmStreamPlayer(
     private var maxQueuedBytes = 72_000
     private var queuedBytes = 0
     private var droppedChunks = 0L
+    @Volatile
+    private var headsetTrack: AudioTrack? = null
+    private val headsetQueue = ArrayBlockingQueue<PlaybackChunk>(64)
+    private var headsetMaxQueuedBytes = 72_000
+    private var headsetQueuedBytes = 0
+    private var headsetWorker: Thread? = null
 
     fun configure(sampleRate: Int, clientGeneration: Long) = synchronized(lifecycleLock) {
         disposeLocked()
@@ -310,16 +380,19 @@ private class PcmStreamPlayer(
         try {
             audioTrack = track
             maxQueuedBytes = sampleRate * 2 * MAX_QUEUE_MILLISECONDS / 1_000
+            headsetMaxQueuedBytes = maxQueuedBytes
             droppedChunks = 0
             lastOutputRoute = "unknown"
             interruptionReported = false
             clearQueue()
+            clearHeadsetQueue()
             val run = PlaybackRunState(clientGeneration)
             playbackRun = run
             check(requestAudioFocus(attributes, run)) { "Audio focus was not granted" }
             registerAudioDeviceCallback()
             selectPreferredCommunicationDevice()
             track.play()
+            configureHeadsetLane(sampleRate, run)
             worker = thread(name = "translated-pcm-playback", isDaemon = true) {
                 while (run.active) {
                     val chunk = try {
@@ -385,6 +458,132 @@ private class PcmStreamPlayer(
         }
     }
 
+    private fun configureHeadsetLane(sampleRate: Int, run: PlaybackRunState) {
+        val headsetDevice = selectHeadsetOutputDevice()
+        if (headsetDevice == null) {
+            headsetTrack = null
+            return
+        }
+        val minimum = AudioTrack.getMinBufferSize(
+            sampleRate,
+            AudioFormat.CHANNEL_OUT_MONO,
+            AudioFormat.ENCODING_PCM_16BIT,
+        )
+        val track = try {
+            AudioTrack.Builder()
+                .setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build(),
+                )
+                .setAudioFormat(
+                    AudioFormat.Builder()
+                        .setSampleRate(sampleRate)
+                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                        .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                        .build(),
+                )
+                .setTransferMode(AudioTrack.MODE_STREAM)
+                .setBufferSizeInBytes(maxOf(minimum, sampleRate / 2))
+                .build()
+        } catch (_: Throwable) {
+            null
+        }
+        if (track == null || track.state != AudioTrack.STATE_INITIALIZED) {
+            track?.release()
+            headsetTrack = null
+            return
+        }
+        if (!track.setPreferredDevice(headsetDevice)) {
+            track.release()
+            headsetTrack = null
+            return
+        }
+        headsetTrack = track
+        track.play()
+        headsetWorker = thread(name = "translated-pcm-headset", isDaemon = true) {
+            while (run.active && headsetTrack === track) {
+                val chunk = try {
+                    headsetQueue.poll(250, TimeUnit.MILLISECONDS)
+                } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    break
+                } ?: continue
+                if (chunk.bytes.isEmpty()) continue
+                synchronized(queueLock) {
+                    headsetQueuedBytes = (headsetQueuedBytes - chunk.bytes.size).coerceAtLeast(0)
+                }
+                val outcome = PlaybackWritePump.write(
+                    byteCount = chunk.bytes.size,
+                    isActive = {
+                        playbackRun === run && run.accepts(chunk) && headsetTrack === track
+                    },
+                    writeNonBlocking = { offset, byteCount ->
+                        synchronized(trackOperationLock) {
+                            if (
+                                playbackRun !== run ||
+                                !run.accepts(chunk) ||
+                                headsetTrack !== track
+                            ) {
+                                0
+                            } else {
+                                track.write(
+                                    chunk.bytes,
+                                    offset,
+                                    byteCount,
+                                    AudioTrack.WRITE_NON_BLOCKING,
+                                )
+                            }
+                        }
+                    },
+                    awaitWritable = {
+                        Thread.sleep(NON_BLOCKING_RETRY_MILLISECONDS)
+                    },
+                )
+                when (outcome) {
+                    PlaybackWriteOutcome.Completed -> Unit
+                    PlaybackWriteOutcome.Cancelled -> {
+                        if (!run.active || headsetTrack !== track) break
+                    }
+                    is PlaybackWriteOutcome.Failed -> {
+                        run.stop()
+                        if (playbackRun === run) {
+                            onPlaybackFailure(
+                                outcome.failure.copy(
+                                    clientGeneration = run.clientGeneration,
+                                ),
+                            )
+                        }
+                        break
+                    }
+                }
+            }
+        }
+    }
+
+    private fun selectHeadsetOutputDevice(): AudioDeviceInfo? {
+        val outputs = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+        return outputs.firstOrNull { device ->
+            when (device.type) {
+                AudioDeviceInfo.TYPE_WIRED_HEADSET,
+                AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+                AudioDeviceInfo.TYPE_LINE_ANALOG,
+                AudioDeviceInfo.TYPE_USB_HEADSET,
+                AudioDeviceInfo.TYPE_USB_DEVICE,
+                AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+                AudioDeviceInfo.TYPE_BLE_HEADSET,
+                AudioDeviceInfo.TYPE_HEARING_AID -> true
+                else -> false
+            }
+        }
+    }
+
+    private fun clearHeadsetQueue() = synchronized(queueLock) {
+        headsetQueue.clear()
+        headsetQueuedBytes = 0
+    }
+
     fun enqueue(bytes: ByteArray) = synchronized(lifecycleLock) enqueue@{
         if (bytes.isEmpty()) return@enqueue
         val run = playbackRun ?: return@enqueue
@@ -411,14 +610,82 @@ private class PcmStreamPlayer(
         }
     }
 
+    /**
+     * Headset-split output: the "headset" track plays through a wired or
+     * Bluetooth headset while the default track keeps the phone speaker.
+     * Fails closed when no headset output device is available.
+     */
+    fun enqueueTrack(trackName: String, bytes: ByteArray) =
+        synchronized(lifecycleLock) enqueueTrack@{
+            if (trackName == "phoneSpeaker") {
+                return@enqueueTrack enqueue(bytes)
+            }
+            if (trackName != "headset") return@enqueueTrack
+            if (bytes.isEmpty()) return@enqueueTrack
+            val run = playbackRun ?: return@enqueueTrack
+            val chunk = run.chunk(bytes.copyOf()) ?: return@enqueueTrack
+            val track = headsetTrack
+            if (track == null || track.state != AudioTrack.STATE_INITIALIZED) {
+                droppedChunks += 1
+                return@enqueueTrack
+            }
+            synchronized(queueLock) {
+                if (chunk.bytes.size > headsetMaxQueuedBytes) {
+                    droppedChunks += 1
+                    return@enqueueTrack
+                }
+                while (
+                    headsetQueuedBytes + chunk.bytes.size > headsetMaxQueuedBytes ||
+                    headsetQueue.remainingCapacity() == 0
+                ) {
+                    val dropped = headsetQueue.poll() ?: break
+                    headsetQueuedBytes = (headsetQueuedBytes - dropped.bytes.size).coerceAtLeast(0)
+                    droppedChunks += 1
+                }
+                if (headsetQueue.offer(chunk)) {
+                    headsetQueuedBytes += chunk.bytes.size
+                } else {
+                    droppedChunks += 1
+                }
+            }
+        }
+
     fun flush() = synchronized(lifecycleLock) {
         flushLocked()
+    }
+
+    fun flushTrack(trackName: String) = synchronized(lifecycleLock) {
+        if (trackName == "headset") {
+            flushHeadsetLocked()
+        } else {
+            flushLocked()
+        }
+    }
+
+    private fun flushHeadsetLocked() {
+        val run = playbackRun
+        run?.invalidatePending()
+        synchronized(queueLock) {
+            headsetQueue.clear()
+            headsetQueuedBytes = 0
+        }
+        val track = headsetTrack ?: return
+        synchronized(trackOperationLock) {
+            if (track.state == AudioTrack.STATE_INITIALIZED) {
+                track.pause()
+                track.flush()
+                if (playbackRun === run && run?.active == true) {
+                    track.play()
+                }
+            }
+        }
     }
 
     private fun flushLocked(resumePlayback: Boolean = true) {
         val run = playbackRun
         val runMayResume = run?.invalidatePending() == true
         clearQueue()
+        clearHeadsetQueue()
         val track = audioTrack ?: return
         synchronized(trackOperationLock) {
             if (track.state == AudioTrack.STATE_INITIALIZED) {
@@ -426,6 +693,18 @@ private class PcmStreamPlayer(
                 track.flush()
                 if (resumePlayback && playbackRun === run && runMayResume) {
                     track.play()
+                }
+            }
+        }
+        val headset = headsetTrack
+        if (headset != null) {
+            synchronized(trackOperationLock) {
+                if (headset.state == AudioTrack.STATE_INITIALIZED) {
+                    headset.pause()
+                    headset.flush()
+                    if (resumePlayback && playbackRun === run && runMayResume) {
+                        headset.play()
+                    }
                 }
             }
         }
@@ -454,8 +733,12 @@ private class PcmStreamPlayer(
         run?.stop()
         val workerToJoin = worker
         worker = null
+        val headsetWorkerToJoin = headsetWorker
+        headsetWorker = null
         val track = audioTrack
         audioTrack = null
+        val headset = headsetTrack
+        headsetTrack = null
         val request = focusRequest
         focusRequest = null
         val legacyListener = legacyFocusListener
@@ -472,7 +755,9 @@ private class PcmStreamPlayer(
 
         BestEffortCleanup.run(
             { clearQueue() },
+            { clearHeadsetQueue() },
             { workerToJoin?.interrupt() },
+            { headsetWorkerToJoin?.interrupt() },
             {
                 if (workerToJoin != null && workerToJoin !== Thread.currentThread()) {
                     try {
@@ -484,10 +769,27 @@ private class PcmStreamPlayer(
                 }
             },
             {
+                if (headsetWorkerToJoin != null &&
+                    headsetWorkerToJoin !== Thread.currentThread()
+                ) {
+                    try {
+                        headsetWorkerToJoin.join(WORKER_JOIN_MILLISECONDS)
+                    } catch (error: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        throw error
+                    }
+                }
+            },
+            {
                 if (track?.playState == AudioTrack.PLAYSTATE_PLAYING) track.stop()
             },
             { track?.flush() },
             { track?.release() },
+            {
+                if (headset?.playState == AudioTrack.PLAYSTATE_PLAYING) headset.stop()
+            },
+            { headset?.flush() },
+            { headset?.release() },
             {
                 if (request != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     audioManager.abandonAudioFocusRequest(request)

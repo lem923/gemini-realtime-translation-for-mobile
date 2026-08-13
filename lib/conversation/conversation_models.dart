@@ -11,8 +11,12 @@ enum SpeakerSide { a, b }
 /// ends with an explicit turn boundary. [simultaneous] keeps the microphone
 /// open while translated audio plays so interpretation streams continuously,
 /// like the AI Studio live playground; it relies on device echo cancellation
-/// and works best with earpiece or headset output.
-enum ConversationMode { sentenceBySentence, simultaneous }
+/// and works best with earpiece or headset output. [headsetSplit] requires a
+/// headset with a microphone: the headset mic captures the wearer (speaker A)
+/// while the built-in mic captures the other person (speaker B); direction is
+/// detected automatically, A's translation plays on the phone speaker and B's
+/// translation plays on the headset.
+enum ConversationMode { sentenceBySentence, simultaneous, headsetSplit }
 
 enum ConversationPhase {
   needsKey,
