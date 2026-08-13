@@ -1,6 +1,6 @@
 # Roadmap
 
-## Phase 0 — Foundation (current)
+## Phase 0 — Foundation
 
 - Define the travel conversation product and latency budget.
 - Survey existing open-source projects and decide whether to fork.
@@ -32,7 +32,7 @@ Exit gate: reliable one-direction translation on the defined physical Android de
 
 Exit gate: two people can complete representative hotel, restaurant, taxi, shopping, and emergency dialogues on one phone.
 
-## Phase 3 — Android hardening and release
+## Phase 3 — Android hardening and release (current)
 
 - Run noisy-street, speakerphone, headset, and weak-network tests.
 - Add privacy notice, explicit retention behavior, and redacted telemetry.

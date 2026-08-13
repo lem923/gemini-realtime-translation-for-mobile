@@ -2,7 +2,7 @@
 
 Android-first, cross-platform, ultra-low-latency, two-way speech translation for face-to-face travel conversations, powered by the Google Gemini Live API and `gemini-3.5-live-translate-preview`.
 
-> Status: Android-first `0.12.0` preview. The app, bounded native Android audio path, real Gemini speech/text/audio pipeline, listener-facing face-to-face translation, interruption-safe speaker switching, translated-audio replay, persisted language-pair preferences, typed offline/quota/permission recovery states, explicit audio-stream boundaries, long-session context compression, system-audio interruption handling, and privacy-safe runtime diagnostics are runnable; physical-device acoustic and latency hardening remains before a production release.
+> Status: Android-first `0.13.0` preview. The app, bounded native Android audio path, external-device-aware communication routing, real Gemini speech/text/audio pipeline, listener-facing face-to-face translation, interruption-safe speaker switching, translated-audio replay, persisted language-pair preferences, typed offline/quota/permission recovery states, explicit audio-stream boundaries, long-session context compression, system-audio interruption handling, and privacy-safe runtime diagnostics are runnable; physical-device acoustic and latency hardening remains before a production release.
 
 ## Product direction
 
@@ -70,7 +70,7 @@ Flutter is the accepted application framework. Android is the first implementati
 
 See the [Google Live Translation guide](https://ai.google.dev/gemini-api/docs/live-api/live-translate) for the current API contract.
 
-## Implemented through 0.12.0
+## Implemented through 0.13.0
 
 - Direct BYOK WebSocket connection to `gemini-3.5-live-translate-preview` with no application backend.
 - Source transcript, translated transcript, and translated 24 kHz PCM audio output.
@@ -115,6 +115,13 @@ See the [Google Live Translation guide](https://ai.google.dev/gemini-api/docs/li
 - Android uses one app-level audio-focus owner. Calls or other focus owners stop
   capture and both Gemini sessions immediately; manual/lifecycle stops release
   `AudioTrack`, communication mode, and focus before a later clean restart.
+- Android translated speech uses the voice-communication audio strategy. On
+  Android 12 and newer, a currently selected external communication device is
+  preserved and wired, USB, hearing-aid, or Bluetooth routes take precedence
+  over the built-in speaker; device add/remove callbacks re-evaluate the route.
+  Older supported Android versions stop forcing speakerphone when an external
+  output is present. No Bluetooth scanning, pairing, or extra nearby-device
+  permission is performed.
 - Diagnostics report the last actual output route, current focus ownership, and
   system-interruption count without exposing key, audio, or transcript content.
 
@@ -134,6 +141,8 @@ Enter your own Google AI Studio key in the app. The key's project must be able t
 - `flutter analyze`: clean.
 - 64 automated protocol, preference, permission, session, PCM, transcript, controller, diagnostics, and
   responsive widget tests: passing.
+- 6 Android host-layer route-policy tests and Android lint: passing. CI runs
+  both the shared Flutter suite and the app-scoped Kotlin/lint gate.
 - Real API smoke: both Chinese-to-English and English-to-Chinese 16 kHz speech
   inputs produced source text, translated text, and 24 kHz audio. The server also
   accepted context compression and returned non-zero usage metadata.
@@ -166,10 +175,18 @@ Enter your own Google AI Studio key in the app. The key's project must be able t
 - Android API 36 face-to-face interaction: both full-width halves expose real
   accessibility click actions, manual A/B taps switch the selected speaker, and
   the opposite half changes to the listener-facing translation role.
+- Android API 36 responsive rendering: standard and face-to-face layouts stayed
+  operable at 360 × 640 dp with 130% font scaling in portrait and landscape,
+  with zero Flutter overflow or application-crash events.
 - Android API 36 audio-focus integration: active focus and speaker route
   observed; manual stop released focus/recording; clean restart succeeded; an
   external foreground service then took focus and the app stopped capture and
   sessions while remaining foreground, with zero session/playback errors.
+- Android API 36 communication routing: active translation owned
+  `MODE_IN_COMMUNICATION` and selected the speaker on a device with no external
+  output; manual stop cleared the mode owner and communication-device request.
+  The emulator did not publish a wired device after accepting its headset event,
+  so physical wired/USB/Bluetooth switching remains a device-matrix gate.
 - The preview APK is signed with a dedicated external release key and verified
   with Android's v2 signature scheme and 16 KB page alignment.
 - Still required before a production release: representative physical Android

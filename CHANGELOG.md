@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-08-13
+
+### Added
+
+- Added an external-device-aware Android communication route policy with
+  deterministic fallback, device add/remove observation, and six Kotlin unit
+  tests enforced alongside Android lint in CI.
+
+### Changed
+
+- Classified translated PCM playback as voice communication instead of
+  accessibility-service audio so playback follows the same Android
+  communication strategy as microphone capture.
+- Preserved an active external communication route and prioritized supported
+  wired, USB, hearing-aid, and Bluetooth devices over the built-in speaker.
+  Phones with no external route still use the speaker for shared conversation.
+- On Android 8–11, speakerphone is no longer forced when the system reports an
+  external output. No scanning, pairing, or nearby-device permission was added.
+
+### Tests
+
+- Passed all 64 Flutter tests at 85.4% line coverage, six Android host tests,
+  Flutter analysis, Android lint, and app-scoped Android compilation.
+- Verified API 36 communication-mode ownership, bare-phone speaker selection,
+  and complete mode/device release after stop without crashes or permission
+  failures.
+- Verified standard and face-to-face layouts at 360 × 640 dp and 130% font
+  scaling in portrait and landscape with no Flutter overflow or crash events.
+- Repeated a real 10-turn Chinese/English hotel, restaurant, taxi, shopping,
+  and emergency dialogue with source text, translated text, translated audio,
+  nine direction switches, zero failures, and zero reconnects.
+
 ## [0.12.0] - 2026-08-13
 
 ### Added

@@ -27,6 +27,7 @@ Run the automated checks:
 dart format --output=none --set-exit-if-changed lib test tool
 flutter analyze
 flutter test
+cd android && ./gradlew :app:testDebugUnitTest :app:lintDebug && cd ..
 ```
 
 Start the Android app:
