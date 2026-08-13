@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-08-13
+
+### Added
+
+- Added typed Android playback-route events so the shared conversation state
+  can react to the route actually selected by the communication audio stack.
+
+### Changed
+
+- Made half-duplex echo protection route-aware. Speaker, earpiece, and unknown
+  shared-phone routes now suppress microphone forwarding through the complete
+  translated playback plus a conservative 300 ms acoustic tail. Wired,
+  Bluetooth, USB, hearing-aid, and HDMI routes retain an 80 ms low-latency tail.
+- Recompute the active protection deadline immediately when the output route
+  changes, while preserving Android echo cancellation, noise suppression, and
+  automatic gain control.
+
+### Tests
+
+- Added event-decoding, complete route-policy, shared-phone tail, and isolated
+  route latency regressions. Passed all 76 Flutter tests at 86.1% line coverage,
+  six Android host tests, Flutter analysis, Android lint, and debug compilation.
+- On Android API 36 with a real Gemini session, diagnostics reported the speaker
+  route and hundreds of microphone chunks suppressed during translated output;
+  muting playback resumed microphone forwarding. Stop released all audio
+  resources. API 26 retained its actionable fail-closed recorder behavior.
+
 ## [0.16.0] - 2026-08-13
 
 ### Fixed
