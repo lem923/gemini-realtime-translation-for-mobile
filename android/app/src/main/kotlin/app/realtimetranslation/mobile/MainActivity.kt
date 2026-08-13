@@ -50,6 +50,11 @@ class MainActivity : FlutterActivity() {
             onInterruption = {
                 runOnUiThread { audioEventSink?.success("interrupted") }
             },
+            onPlaybackFailure = { failure ->
+                runOnUiThread {
+                    audioEventSink?.success(failure.toEventPayload())
+                }
+            },
             onRouteChanged = { route ->
                 runOnUiThread {
                     audioEventSink?.success(
@@ -143,7 +148,9 @@ class MainActivity : FlutterActivity() {
                     "configure" -> {
                         val arguments = call.arguments as? Map<*, *>
                         val sampleRate = arguments?.get("sampleRate") as? Int ?: 24_000
-                        pcmPlayer.configure(sampleRate)
+                        val clientGeneration =
+                            (arguments?.get("clientGeneration") as? Number)?.toLong() ?: 0L
+                        pcmPlayer.configure(sampleRate, clientGeneration)
                         result.success(null)
                     }
                     "enqueue" -> {
@@ -173,12 +180,18 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
-        audioEventSink = null
-        permissionEventSink = null
-        permissionHandler.removeCallbacks(permissionPoll)
-        player?.dispose()
-        player = null
-        super.onDestroy()
+        try {
+            audioEventSink = null
+            permissionEventSink = null
+            val currentPlayer = player
+            player = null
+            BestEffortCleanup.run(
+                { permissionHandler.removeCallbacks(permissionPoll) },
+                { currentPlayer?.dispose() },
+            )
+        } finally {
+            super.onDestroy()
+        }
     }
 
     private fun microphonePermissionStatus(): String {
@@ -225,19 +238,24 @@ class MainActivity : FlutterActivity() {
 private class PcmStreamPlayer(
     context: Context,
     private val onInterruption: () -> Unit,
+    private val onPlaybackFailure: (PlaybackWriteFailure) -> Unit,
     private val onRouteChanged: (String) -> Unit,
 ) {
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-    private val queue = ArrayBlockingQueue<ByteArray>(64)
+    private val queue = ArrayBlockingQueue<PlaybackChunk>(64)
     private val queueLock = Any()
     private val lifecycleLock = Any()
-    private val writeLock = Any()
+    private val trackOperationLock = Any()
+    @Volatile
     private var audioTrack: AudioTrack? = null
     private var worker: Thread? = null
-    private var running = false
+    @Volatile
+    private var playbackRun: PlaybackRunState? = null
     private var focusRequest: AudioFocusRequest? = null
     private var legacyFocusListener: AudioManager.OnAudioFocusChangeListener? = null
     private var audioDeviceCallbackRegistered = false
+    private var communicationRouteOwned = false
+    private var communicationModeOwned = false
     private val audioDeviceCallback = object : AudioDeviceCallback() {
         override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) {
             refreshCommunicationRoute()
@@ -257,7 +275,7 @@ private class PcmStreamPlayer(
     private var queuedBytes = 0
     private var droppedChunks = 0L
 
-    fun configure(sampleRate: Int) = synchronized(lifecycleLock) {
+    fun configure(sampleRate: Int, clientGeneration: Long) = synchronized(lifecycleLock) {
         disposeLocked()
         val channelMask = AudioFormat.CHANNEL_OUT_MONO
         val encoding = AudioFormat.ENCODING_PCM_16BIT
@@ -281,8 +299,13 @@ private class PcmStreamPlayer(
             builder.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
         }
         val track = builder.build()
-        check(track.state == AudioTrack.STATE_INITIALIZED) {
-            "AudioTrack failed to initialize"
+        try {
+            check(track.state == AudioTrack.STATE_INITIALIZED) {
+                "AudioTrack failed to initialize"
+            }
+        } catch (error: Throwable) {
+            BestEffortCleanup.run({ track.release() })
+            throw error
         }
         try {
             audioTrack = track
@@ -291,35 +314,67 @@ private class PcmStreamPlayer(
             lastOutputRoute = "unknown"
             interruptionReported = false
             clearQueue()
-            check(requestAudioFocus(attributes)) { "Audio focus was not granted" }
+            val run = PlaybackRunState(clientGeneration)
+            playbackRun = run
+            check(requestAudioFocus(attributes, run)) { "Audio focus was not granted" }
             registerAudioDeviceCallback()
             selectPreferredCommunicationDevice()
-            running = true
             track.play()
             worker = thread(name = "translated-pcm-playback", isDaemon = true) {
-                while (running) {
-                    val bytes = queue.poll(250, TimeUnit.MILLISECONDS) ?: continue
-                    if (bytes.isEmpty()) continue
+                while (run.active) {
+                    val chunk = try {
+                        queue.poll(250, TimeUnit.MILLISECONDS)
+                    } catch (_: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        break
+                    } ?: continue
+                    if (chunk.bytes.isEmpty()) continue
                     synchronized(queueLock) {
-                        queuedBytes = (queuedBytes - bytes.size).coerceAtLeast(0)
+                        queuedBytes = (queuedBytes - chunk.bytes.size).coerceAtLeast(0)
                     }
-                    synchronized(writeLock) {
-                        if (running && track.playState == AudioTrack.PLAYSTATE_PLAYING) {
-                            var offset = 0
-                            while (running && offset < bytes.size) {
-                                val written = track.write(
-                                    bytes,
-                                    offset,
-                                    bytes.size - offset,
-                                    AudioTrack.WRITE_BLOCKING,
-                                )
-                                if (written <= 0) {
-                                    if (written < 0) running = false
-                                    break
+                    val outcome = PlaybackWritePump.write(
+                        byteCount = chunk.bytes.size,
+                        isActive = {
+                            playbackRun === run && run.accepts(chunk)
+                        },
+                        writeNonBlocking = { offset, byteCount ->
+                            synchronized(trackOperationLock) {
+                                if (
+                                    playbackRun !== run ||
+                                    !run.accepts(chunk)
+                                ) {
+                                    0
+                                } else {
+                                    track.write(
+                                        chunk.bytes,
+                                        offset,
+                                        byteCount,
+                                        AudioTrack.WRITE_NON_BLOCKING,
+                                    )
                                 }
-                                offset += written
                             }
+                        },
+                        awaitWritable = {
+                            Thread.sleep(NON_BLOCKING_RETRY_MILLISECONDS)
+                        },
+                    )
+                    when (outcome) {
+                        PlaybackWriteOutcome.Completed -> {
                             updateLastOutputRoute()
+                        }
+                        PlaybackWriteOutcome.Cancelled -> {
+                            if (!run.active || playbackRun !== run) break
+                        }
+                        is PlaybackWriteOutcome.Failed -> {
+                            run.stop()
+                            if (playbackRun === run) {
+                                onPlaybackFailure(
+                                    outcome.failure.copy(
+                                        clientGeneration = run.clientGeneration,
+                                    ),
+                                )
+                            }
+                            break
                         }
                     }
                 }
@@ -330,36 +385,48 @@ private class PcmStreamPlayer(
         }
     }
 
-    fun enqueue(bytes: ByteArray) {
-        if (!running || bytes.isEmpty()) return
+    fun enqueue(bytes: ByteArray) = synchronized(lifecycleLock) enqueue@{
+        if (bytes.isEmpty()) return@enqueue
+        val run = playbackRun ?: return@enqueue
+        val chunk = run.chunk(bytes.copyOf()) ?: return@enqueue
         updateLastOutputRoute()
-        val copy = bytes.copyOf()
         synchronized(queueLock) {
-            if (copy.size > maxQueuedBytes) {
+            if (chunk.bytes.size > maxQueuedBytes) {
                 droppedChunks += 1
-                return
+                return@enqueue
             }
-            while (queuedBytes + copy.size > maxQueuedBytes || queue.remainingCapacity() == 0) {
+            while (
+                queuedBytes + chunk.bytes.size > maxQueuedBytes ||
+                queue.remainingCapacity() == 0
+            ) {
                 val dropped = queue.poll() ?: break
-                queuedBytes = (queuedBytes - dropped.size).coerceAtLeast(0)
+                queuedBytes = (queuedBytes - dropped.bytes.size).coerceAtLeast(0)
                 droppedChunks += 1
             }
-            if (queue.offer(copy)) {
-                queuedBytes += copy.size
+            if (queue.offer(chunk)) {
+                queuedBytes += chunk.bytes.size
             } else {
                 droppedChunks += 1
             }
         }
     }
 
-    fun flush() {
+    fun flush() = synchronized(lifecycleLock) {
+        flushLocked()
+    }
+
+    private fun flushLocked(resumePlayback: Boolean = true) {
+        val run = playbackRun
+        val runMayResume = run?.invalidatePending() == true
         clearQueue()
-        synchronized(writeLock) {
-            val track = audioTrack ?: return
+        val track = audioTrack ?: return
+        synchronized(trackOperationLock) {
             if (track.state == AudioTrack.STATE_INITIALIZED) {
                 track.pause()
                 track.flush()
-                if (running) track.play()
+                if (resumePlayback && playbackRun === run && runMayResume) {
+                    track.play()
+                }
             }
         }
     }
@@ -382,60 +449,113 @@ private class PcmStreamPlayer(
     }
 
     private fun disposeLocked() {
-        running = false
-        clearQueue()
-        queue.offer(ByteArray(0))
-        worker?.join(500)
+        val run = playbackRun
+        playbackRun = null
+        run?.stop()
+        val workerToJoin = worker
         worker = null
-        synchronized(writeLock) {
-            audioTrack?.let { track ->
-                try {
-                    if (track.playState == AudioTrack.PLAYSTATE_PLAYING) track.stop()
-                } catch (_: IllegalStateException) {
-                    // The platform may already have released the route.
-                }
-                track.flush()
-                track.release()
-            }
-            audioTrack = null
-        }
-        focusRequest?.let { request ->
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                audioManager.abandonAudioFocusRequest(request)
-            }
-        }
+        val track = audioTrack
+        audioTrack = null
+        val request = focusRequest
         focusRequest = null
-        legacyFocusListener?.let { listener ->
-            @Suppress("DEPRECATION")
-            audioManager.abandonAudioFocus(listener)
-        }
+        val legacyListener = legacyFocusListener
         legacyFocusListener = null
+        val unregisterDeviceCallback = audioDeviceCallbackRegistered
+        audioDeviceCallbackRegistered = false
+        val clearCommunicationRoute = communicationRouteOwned
+        communicationRouteOwned = false
+        val resetCommunicationMode = communicationModeOwned
+        communicationModeOwned = false
         audioFocusGranted = false
-        if (audioDeviceCallbackRegistered) {
-            audioManager.unregisterAudioDeviceCallback(audioDeviceCallback)
-            audioDeviceCallbackRegistered = false
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            audioManager.clearCommunicationDevice()
-        } else {
-            @Suppress("DEPRECATION")
-            audioManager.isSpeakerphoneOn = false
-        }
-        audioManager.mode = AudioManager.MODE_NORMAL
+        interruptionReported = false
+        lastOutputRoute = "unknown"
+
+        BestEffortCleanup.run(
+            { clearQueue() },
+            { workerToJoin?.interrupt() },
+            {
+                if (workerToJoin != null && workerToJoin !== Thread.currentThread()) {
+                    try {
+                        workerToJoin.join(WORKER_JOIN_MILLISECONDS)
+                    } catch (error: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        throw error
+                    }
+                }
+            },
+            {
+                if (track?.playState == AudioTrack.PLAYSTATE_PLAYING) track.stop()
+            },
+            { track?.flush() },
+            { track?.release() },
+            {
+                if (request != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    audioManager.abandonAudioFocusRequest(request)
+                }
+            },
+            {
+                if (legacyListener != null) {
+                    @Suppress("DEPRECATION")
+                    audioManager.abandonAudioFocus(legacyListener)
+                }
+            },
+            {
+                if (unregisterDeviceCallback) {
+                    audioManager.unregisterAudioDeviceCallback(audioDeviceCallback)
+                }
+            },
+            {
+                if (clearCommunicationRoute) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        audioManager.clearCommunicationDevice()
+                    } else {
+                        @Suppress("DEPRECATION")
+                        audioManager.isSpeakerphoneOn = false
+                    }
+                }
+            },
+            {
+                if (resetCommunicationMode) {
+                    audioManager.mode = AudioManager.MODE_NORMAL
+                }
+            },
+        )
     }
 
-    private fun requestAudioFocus(attributes: AudioAttributes): Boolean {
+    private fun requestAudioFocus(
+        attributes: AudioAttributes,
+        run: PlaybackRunState,
+    ): Boolean {
+        communicationModeOwned = true
         audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
         val listener = AudioManager.OnAudioFocusChangeListener { change ->
             if ((change == AudioManager.AUDIOFOCUS_LOSS ||
                     change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) &&
-                running && !interruptionReported
+                run.active && playbackRun === run && !interruptionReported
             ) {
-                interruptionReported = true
-                audioFocusGranted = false
-                flush()
-                onInterruption()
-            } else if (change == AudioManager.AUDIOFOCUS_GAIN) {
+                val shouldReport = synchronized(lifecycleLock) {
+                    if (
+                        playbackRun !== run ||
+                        interruptionReported ||
+                        !run.stop()
+                    ) {
+                        false
+                    } else {
+                        interruptionReported = true
+                        audioFocusGranted = false
+                        // Focus loss is terminal for this run. In particular,
+                        // flushing must not call play() or accept more enqueue
+                        // requests while Dart performs asynchronous teardown.
+                        flushLocked(resumePlayback = false)
+                        true
+                    }
+                }
+                if (shouldReport) onInterruption()
+            } else if (
+                change == AudioManager.AUDIOFOCUS_GAIN &&
+                run.active &&
+                playbackRun === run
+            ) {
                 audioFocusGranted = true
             }
         }
@@ -462,8 +582,8 @@ private class PcmStreamPlayer(
 
     private fun registerAudioDeviceCallback() {
         if (audioDeviceCallbackRegistered) return
-        audioManager.registerAudioDeviceCallback(audioDeviceCallback, Handler(Looper.getMainLooper()))
         audioDeviceCallbackRegistered = true
+        audioManager.registerAudioDeviceCallback(audioDeviceCallback, Handler(Looper.getMainLooper()))
     }
 
     private fun refreshCommunicationRoute() = synchronized(lifecycleLock) {
@@ -471,6 +591,7 @@ private class PcmStreamPlayer(
     }
 
     private fun selectPreferredCommunicationDevice() {
+        communicationRouteOwned = true
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             val devices = audioManager.availableCommunicationDevices
             val preferredType = AudioRoutePolicy.preferredType(
@@ -532,5 +653,8 @@ private class PcmStreamPlayer(
 
     companion object {
         private const val MAX_QUEUE_MILLISECONDS = 1_500
+        private const val NON_BLOCKING_RETRY_MILLISECONDS = 2L
+        private const val WORKER_JOIN_MILLISECONDS = 500L
     }
+
 }

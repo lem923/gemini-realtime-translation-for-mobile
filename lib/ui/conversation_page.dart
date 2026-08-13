@@ -893,6 +893,8 @@ class _FaceToFaceView extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
       child: Column(
         children: <Widget>[
+          _FaceStatusPanel(controller: controller),
+          const SizedBox(height: 8),
           Expanded(
             child: SizedBox(
               width: double.infinity,
@@ -928,6 +930,34 @@ class _FaceToFaceView extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _FaceStatusPanel extends StatelessWidget {
+  const _FaceStatusPanel({required this.controller});
+
+  final ConversationController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        _StatusStrip(controller: controller),
+        if (controller.errorMessage != null) ...<Widget>[
+          const SizedBox(height: 8),
+          _ErrorBanner(
+            message: controller.errorMessage!,
+            actionLabel: controller.phase == ConversationPhase.permissionDenied
+                ? '打开系统设置'
+                : null,
+            onAction: controller.phase == ConversationPhase.permissionDenied
+                ? () => unawaited(controller.openMicrophoneSettings())
+                : null,
+          ),
+        ],
+      ],
     );
   }
 }
@@ -988,6 +1018,35 @@ class _FaceHalf extends StatelessWidget {
           builder: (BuildContext context, BoxConstraints constraints) {
             final bool compact = constraints.maxHeight < 240;
             final double gap = compact ? 4 : 12;
+            final Widget roleBadge = Container(
+              padding: EdgeInsets.symmetric(
+                horizontal: compact ? 8 : 11,
+                vertical: compact ? 3 : 5,
+              ),
+              decoration: BoxDecoration(
+                color: accent.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Icon(
+                    selected ? Icons.mic_rounded : Icons.translate_rounded,
+                    color: accent,
+                    size: compact ? 17 : 20,
+                  ),
+                  const SizedBox(width: 5),
+                  Text(
+                    role,
+                    style: TextStyle(
+                      color: accent,
+                      fontSize: compact ? 11 : 13,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ],
+              ),
+            );
             return InkWell(
               onTap: selectSpeaker,
               child: Padding(
@@ -995,61 +1054,66 @@ class _FaceHalf extends StatelessWidget {
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: <Widget>[
-                    Text(
-                      language.flag,
-                      style: TextStyle(fontSize: compact ? 28 : 36),
-                    ),
-                    SizedBox(height: compact ? 2 : 8),
-                    Text(
-                      language.name,
-                      style: TextStyle(
-                        color: accent,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    SizedBox(height: gap),
-                    Container(
-                      padding: EdgeInsets.symmetric(
-                        horizontal: compact ? 8 : 11,
-                        vertical: compact ? 3 : 5,
-                      ),
-                      decoration: BoxDecoration(
-                        color: accent.withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
+                    if (compact)
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
                         children: <Widget>[
-                          Icon(
-                            selected
-                                ? Icons.mic_rounded
-                                : Icons.translate_rounded,
-                            color: accent,
-                            size: compact ? 17 : 20,
-                          ),
-                          const SizedBox(width: 5),
                           Text(
-                            role,
-                            style: TextStyle(
-                              color: accent,
-                              fontSize: compact ? 11 : 13,
-                              fontWeight: FontWeight.w800,
+                            language.flag,
+                            style: const TextStyle(fontSize: 22),
+                          ),
+                          const SizedBox(width: 6),
+                          Flexible(
+                            child: Text(
+                              language.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: accent,
+                                fontWeight: FontWeight.w800,
+                              ),
                             ),
                           ),
+                          const SizedBox(width: 8),
+                          roleBadge,
                         ],
+                      )
+                    else ...<Widget>[
+                      Text(language.flag, style: const TextStyle(fontSize: 36)),
+                      const SizedBox(height: 8),
+                      Text(
+                        language.name,
+                        style: TextStyle(
+                          color: accent,
+                          fontWeight: FontWeight.w800,
+                        ),
                       ),
-                    ),
+                      SizedBox(height: gap),
+                      roleBadge,
+                    ],
                     SizedBox(height: gap),
-                    Text(
-                      text,
-                      maxLines: compact ? 2 : 4,
-                      overflow: TextOverflow.ellipsis,
-                      textAlign: TextAlign.center,
-                      style:
-                          (compact
-                                  ? Theme.of(context).textTheme.titleMedium
-                                  : Theme.of(context).textTheme.titleLarge)
-                              ?.copyWith(fontWeight: FontWeight.w700),
+                    Expanded(
+                      child: Center(
+                        child: SingleChildScrollView(
+                          key: ValueKey<String>(
+                            'face-text-scroll-${side.name}',
+                          ),
+                          primary: false,
+                          child: Text(
+                            text,
+                            textAlign: TextAlign.center,
+                            style:
+                                (compact
+                                        ? Theme.of(
+                                            context,
+                                          ).textTheme.titleMedium
+                                        : Theme.of(
+                                            context,
+                                          ).textTheme.titleLarge)
+                                    ?.copyWith(fontWeight: FontWeight.w700),
+                          ),
+                        ),
+                      ),
                     ),
                   ],
                 ),
@@ -1249,9 +1313,24 @@ class _ApiKeySheetState extends State<_ApiKeySheet> {
                   Icon(Icons.lock_outline_rounded, color: colors.primary),
                   const SizedBox(width: 10),
                   const Expanded(
-                    child: Text(
-                      'Key 只用于从本机直连 Google Gemini。应用没有账号、项目后端或云端对话存储。',
-                      style: TextStyle(fontSize: 12, height: 1.45),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        Text(
+                          '数据与隐私',
+                          style: TextStyle(fontWeight: FontWeight.w800),
+                        ),
+                        SizedBox(height: 5),
+                        Text(
+                          'API Key 只用于从本机直连 Google Gemini。麦克风音频和转写文本会发送至 Google Gemini 处理，Google 侧的数据处理受 Gemini API 服务条款约束。',
+                          style: TextStyle(fontSize: 12, height: 1.45),
+                        ),
+                        SizedBox(height: 5),
+                        Text(
+                          '本地当前对话与译音回放仅保存在内存中，退出应用时清除；应用没有账号、项目后端或云端对话存储。',
+                          style: TextStyle(fontSize: 12, height: 1.45),
+                        ),
+                      ],
                     ),
                   ),
                 ],

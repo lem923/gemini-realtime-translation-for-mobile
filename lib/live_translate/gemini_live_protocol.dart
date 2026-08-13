@@ -168,12 +168,18 @@ class GeminiLiveProtocol {
       for (final Object? rawPart in rawParts) {
         final Map<String, Object?>? part = _map(rawPart);
         final Map<String, Object?>? inlineData = _map(part?['inlineData']);
+        if (!_isOutputAudioMimeType(inlineData?['mimeType'])) {
+          continue;
+        }
         final String? data = _string(inlineData?['data']);
         if (data == null || data.isEmpty) {
           continue;
         }
         try {
-          events.add(LiveAudioChunk(base64Decode(data)));
+          final Uint8List bytes = base64Decode(data);
+          if (bytes.isNotEmpty) {
+            events.add(LiveAudioChunk(bytes));
+          }
         } on FormatException {
           // Ignore only the malformed audio part; transcript data remains useful.
         }
@@ -196,6 +202,38 @@ class GeminiLiveProtocol {
   }
 
   static String? _string(Object? value) => value is String ? value : null;
+
+  static bool _isOutputAudioMimeType(Object? value) {
+    if (value is! String) {
+      return false;
+    }
+    final List<String> sections = value.split(';');
+    if (sections.isEmpty ||
+        sections.first.trim().toLowerCase() != 'audio/pcm') {
+      return false;
+    }
+    final Map<String, String> parameters = <String, String>{};
+    for (final String section in sections.skip(1)) {
+      final int separator = section.indexOf('=');
+      if (separator <= 0 || separator == section.length - 1) {
+        return false;
+      }
+      final String name = section.substring(0, separator).trim().toLowerCase();
+      if (name != 'rate' && name != 'channels') {
+        return false;
+      }
+      if (parameters.containsKey(name)) {
+        return false;
+      }
+      final String parameterValue = section.substring(separator + 1).trim();
+      if (parameterValue.isEmpty) {
+        return false;
+      }
+      parameters[name] = parameterValue;
+    }
+    return parameters['rate'] == '24000' &&
+        (parameters['channels'] == null || parameters['channels'] == '1');
+  }
 
   static int _nonNegativeInt(Object? value) {
     final int? parsed = switch (value) {

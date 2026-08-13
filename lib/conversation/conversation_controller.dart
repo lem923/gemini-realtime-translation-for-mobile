@@ -16,6 +16,8 @@ import '../shared/translation_language.dart';
 import 'conversation_diagnostics.dart';
 import 'conversation_models.dart';
 
+enum _PersistedKeyState { unknown, absent, present }
+
 class ConversationController extends ChangeNotifier {
   ConversationController({
     ApiKeyStore? keyStore,
@@ -25,6 +27,7 @@ class ConversationController extends ChangeNotifier {
     MicrophonePermissionGateway? permissionGateway,
     LiveSessionFactory? sessionFactory,
     int Function()? monotonicMicros,
+    this.cleanupTimeout = const Duration(seconds: 2),
   }) : _keyStore = keyStore ?? SecureApiKeyStore(),
        _audioCapture = audioCapture ?? RecordAudioCaptureGateway(),
        _playback = playback ?? PlatformPcmPlaybackGateway(),
@@ -48,6 +51,8 @@ class ConversationController extends ChangeNotifier {
   final MicrophonePermissionGateway _permissionGateway;
   final LiveSessionFactory _sessionFactory;
   final int Function() _monotonicMicros;
+  @visibleForTesting
+  final Duration cleanupTimeout;
   final Map<SpeakerSide, LiveTranslationSession> _sessions =
       <SpeakerSide, LiveTranslationSession>{};
   final Map<SpeakerSide, StreamSubscription<LiveEvent>> _sessionSubscriptions =
@@ -69,8 +74,16 @@ class ConversationController extends ChangeNotifier {
   Future<void> _playbackChain = Future<void>.value();
   Future<void>? _stopOperation;
   Future<void>? _replayOperation;
+  Future<void>? _keyInvalidationOperation;
+  Future<void>? _playbackDisposalOperation;
+  bool _pendingStopPreserveError = false;
+  ConversationPhase? _pendingStopFinalPhase;
+  String? _pendingStopFinalError;
   String _apiKey = '';
   bool _rememberKey = false;
+  _PersistedKeyState _persistedKeyState = _PersistedKeyState.unknown;
+  String? _desiredPersistedKey;
+  int _keyPersistenceIntentGeneration = 0;
   bool _initialized = false;
   bool _audioMuted = false;
   bool _disposed = false;
@@ -82,6 +95,8 @@ class ConversationController extends ChangeNotifier {
   int _scheduledPlaybackEndMicros = 0;
   int _conversationGeneration = 0;
   int _replayGeneration = 0;
+  int _playbackGeneration = 0;
+  int _playbackFlushesInFlight = 0;
   int _turnId = 0;
   int? _replayingTurnId;
   int? _diagnosticStartedMicros;
@@ -213,7 +228,16 @@ class ConversationController extends ChangeNotifier {
     String? stored;
     try {
       stored = await _keyStore.read();
+      _persistedKeyState = stored == null || stored.trim().isEmpty
+          ? _PersistedKeyState.absent
+          : _PersistedKeyState.present;
+      _setKeyPersistenceIntent(
+        _persistedKeyState == _PersistedKeyState.present
+            ? stored?.trim()
+            : null,
+      );
     } catch (_) {
+      _persistedKeyState = _PersistedKeyState.unknown;
       _errorMessage = '无法读取已保存的 API Key，请重新输入';
     }
     if (_disposed) {
@@ -248,6 +272,7 @@ class ConversationController extends ChangeNotifier {
     required String candidate,
     required bool remember,
   }) async {
+    await _keyInvalidationOperation;
     final String key = candidate.trim().isEmpty ? _apiKey : candidate.trim();
     if (key.isEmpty) {
       _errorMessage = '请输入 Gemini API Key';
@@ -277,19 +302,8 @@ class ConversationController extends ChangeNotifier {
       if (probeFailure != null) {
         throw StateError('Probe rejected');
       }
-      _apiKey = key;
-      _rememberKey = remember;
-      if (remember) {
-        await _keyStore.write(key);
-      } else {
-        await _keyStore.delete();
-      }
-      _phase = ConversationPhase.idle;
-      _errorMessage = null;
-      notifyListeners();
-      return true;
     } catch (_) {
-      _phase = ConversationPhase.needsKey;
+      _phase = hasApiKey ? ConversationPhase.idle : ConversationPhase.needsKey;
       _errorMessage = probeFailure ?? '验证失败，请检查 Key、模型权限与网络';
       notifyListeners();
       return false;
@@ -297,15 +311,64 @@ class ConversationController extends ChangeNotifier {
       await _cancelSubscriptionBestEffort(subscription);
       await _runCleanupBestEffort(probe.close);
     }
+
+    var effectiveRemember = remember;
+    String? storageWarning;
+    if (remember) {
+      _setKeyPersistenceIntent(key);
+      try {
+        await _keyStore.write(key);
+        _persistedKeyState = _PersistedKeyState.present;
+      } catch (_) {
+        _setKeyPersistenceIntent(null);
+        // A validated key remains useful in the current process. Try to remove
+        // a possibly partial/stale write before describing it as memory-only.
+        try {
+          await _keyStore.delete();
+          _persistedKeyState = _PersistedKeyState.absent;
+          storageWarning = 'Key 已验证，但无法安全保存；本次仅保存在内存中';
+        } catch (_) {
+          _persistedKeyState = _PersistedKeyState.unknown;
+          storageWarning = 'Key 已验证并可用于本次会话，但设备安全存储状态未知；请重试移除或清除应用数据';
+        }
+        effectiveRemember = false;
+      }
+    } else if (_persistedKeyState != _PersistedKeyState.absent) {
+      _setKeyPersistenceIntent(null);
+      try {
+        await _keyStore.delete();
+        _persistedKeyState = _PersistedKeyState.absent;
+      } catch (_) {
+        _persistedKeyState = _PersistedKeyState.unknown;
+        storageWarning = 'Key 已验证并可用于本次会话，但无法确认设备副本已清除；请重试移除或清除应用数据';
+      }
+    } else {
+      _setKeyPersistenceIntent(null);
+    }
+
+    _apiKey = key;
+    _rememberKey = effectiveRemember;
+    _phase = ConversationPhase.idle;
+    _errorMessage = storageWarning;
+    notifyListeners();
+    return true;
   }
 
   Future<void> removeApiKey() async {
+    await _keyInvalidationOperation;
     await stopConversation();
-    await _keyStore.delete();
     _apiKey = '';
     _rememberKey = false;
+    _setKeyPersistenceIntent(null);
     _phase = ConversationPhase.needsKey;
-    _errorMessage = null;
+    try {
+      await _keyStore.delete();
+      _persistedKeyState = _PersistedKeyState.absent;
+      _errorMessage = null;
+    } catch (_) {
+      _persistedKeyState = _PersistedKeyState.unknown;
+      _errorMessage = '已从当前会话移除 Key，但无法清除设备安全存储；请清除应用数据';
+    }
     notifyListeners();
   }
 
@@ -347,7 +410,7 @@ class ConversationController extends ChangeNotifier {
         await _flushPlayback();
         return;
       }
-      await _ensureSession(_activeSpeaker);
+      await _ensureSelectedSession(generation);
       if (!_isCurrentConversation(generation)) {
         return;
       }
@@ -356,13 +419,45 @@ class ConversationController extends ChangeNotifier {
         await _audioCapture.stop();
         return;
       }
-      _captureSubscription = stream.listen(
-        _routeMicrophoneChunk,
+      // The user may switch the selected speaker while native capture is
+      // starting. Re-check the latest direction before accepting any frame.
+      await _ensureSelectedSession(generation);
+      if (!_isCurrentConversation(generation)) {
+        await _audioCapture.stop();
+        return;
+      }
+      var captureTerminated = false;
+      void handleCaptureTermination(String message) {
+        if (captureTerminated) {
+          return;
+        }
+        captureTerminated = true;
+        if (_isCurrentConversation(generation) && _stopOperation == null) {
+          _terminateConversation(message);
+        }
+      }
+
+      late final StreamSubscription<Uint8List> captureSubscription;
+      captureSubscription = stream.listen(
+        (Uint8List chunk) {
+          if (_isCurrentConversation(generation) &&
+              identical(_captureSubscription, captureSubscription)) {
+            _routeMicrophoneChunk(chunk);
+          }
+        },
         onError: (Object error, StackTrace stackTrace) {
-          _terminateConversation('麦克风采集失败，请重试');
+          if (identical(_captureSubscription, captureSubscription)) {
+            handleCaptureTermination('麦克风采集失败，请重试');
+          }
+        },
+        onDone: () {
+          if (identical(_captureSubscription, captureSubscription)) {
+            handleCaptureTermination('麦克风采集已停止，请重试');
+          }
         },
         cancelOnError: false,
       );
+      _captureSubscription = captureSubscription;
       _phase = ConversationPhase.listening;
       _listeningReadyMilliseconds ??= _elapsedDiagnosticMilliseconds();
       notifyListeners();
@@ -370,6 +465,10 @@ class ConversationController extends ChangeNotifier {
       unawaited(_ensureSession(standby).catchError((Object _) {}));
     } catch (error) {
       if (!_isCurrentConversation(generation)) {
+        final Future<void>? stopping = _stopOperation;
+        if (stopping != null) {
+          await stopping;
+        }
         return;
       }
       final Future<void>? stopping = _stopOperation;
@@ -431,6 +530,19 @@ class ConversationController extends ChangeNotifier {
     }
     _microphonePermissionGrantedOnce = false;
     const String message = '麦克风权限已被撤销，翻译已停止';
+    if (_stopOperation != null) {
+      _phase = ConversationPhase.permissionDenied;
+      _errorMessage = message;
+      notifyListeners();
+      unawaited(
+        _stopConversationWithOutcome(
+          preserveError: true,
+          finalPhase: ConversationPhase.permissionDenied,
+          finalError: message,
+        ),
+      );
+      return;
+    }
     if (canStopConversation || _captureSubscription != null) {
       _terminateConversation(
         message,
@@ -476,17 +588,32 @@ class ConversationController extends ChangeNotifier {
       final TranslationLanguage target = side == SpeakerSide.a
           ? _languageB
           : _languageA;
-      session = _sessionFactory(
+      final LiveTranslationSession createdSession = _sessionFactory(
         apiKey: _apiKey,
         targetLanguageCode: target.code,
       );
+      final int generation = _conversationGeneration;
+      session = createdSession;
       _sessions[side] = session;
-      _sessionSubscriptions[side] = session.events.listen(
-        (LiveEvent event) => _handleLiveEvent(side, event),
-      );
+      _sessionSubscriptions[side] = session.events.listen((LiveEvent event) {
+        if (_isCurrentConversation(generation) &&
+            identical(_sessions[side], createdSession)) {
+          _handleLiveEvent(side, event);
+        }
+      });
     }
     if (!session.isReady) {
       await session.connect();
+    }
+  }
+
+  Future<void> _ensureSelectedSession(int generation) async {
+    while (_isCurrentConversation(generation)) {
+      final SpeakerSide selectedSide = _activeSpeaker;
+      await _ensureSession(selectedSide);
+      if (selectedSide == _activeSpeaker) {
+        return;
+      }
     }
   }
 
@@ -494,19 +621,24 @@ class ConversationController extends ChangeNotifier {
     if (!isListening) {
       return;
     }
-    if (_monotonicMicros() < _captureBlockedUntilMicros) {
+    if (_playbackFlushesInFlight > 0 ||
+        _monotonicMicros() < _captureBlockedUntilMicros) {
       _microphoneChunksSuppressed += 1;
       return;
     }
     final LiveTranslationSession? session = _sessions[_activeSpeaker];
     if (session?.isReady == true) {
       final int now = _monotonicMicros();
-      _firstMicrophoneSentMicros ??= now;
-      _firstMicrophoneSentMilliseconds ??= _elapsedDiagnosticMillisecondsAt(
-        now,
-      );
-      _microphoneChunksSent += 1;
-      session!.sendAudio(chunk);
+      try {
+        session!.sendAudio(chunk);
+        _firstMicrophoneSentMicros ??= now;
+        _firstMicrophoneSentMilliseconds ??= _elapsedDiagnosticMillisecondsAt(
+          now,
+        );
+        _microphoneChunksSent += 1;
+      } catch (_) {
+        _terminateConversation('连接已中断，请检查网络后重试');
+      }
     }
   }
 
@@ -559,6 +691,10 @@ class ConversationController extends ChangeNotifier {
       case LiveInterrupted():
         if (side == _activeSpeaker) {
           _discardTurnAudio(side);
+          // Interruption is an explicit turn boundary. Keep already visible
+          // text, but never merge it into the next utterance or replay stale
+          // audio from the interrupted response.
+          _commitTurn(side);
           if (_replayingTurnId != null || _replayOperation != null) {
             unawaited(stopReplay());
           } else {
@@ -594,7 +730,9 @@ class ConversationController extends ChangeNotifier {
       ):
         if (side == _activeSpeaker) {
           _sessionFailures += 1;
-          if (authenticationFailure || !retryable) {
+          if (authenticationFailure) {
+            _invalidateApiKeyAfterAuthenticationFailure(userMessage);
+          } else if (!retryable) {
             final ConversationPhase terminalPhase = switch (kind) {
               LiveFailureKind.rateLimited => ConversationPhase.rateLimited,
               LiveFailureKind.offline => ConversationPhase.offline,
@@ -641,30 +779,58 @@ class ConversationController extends ChangeNotifier {
   }
 
   void _appendPlayback(Future<void> Function() operation) {
-    _playbackChain = _playbackChain.then((_) => operation()).catchError((
-      Object error,
-      StackTrace stackTrace,
-    ) {
-      _handlePlaybackFailure();
-    });
+    final int generation = _playbackGeneration;
+    _playbackChain = _playbackChain
+        .then((_) {
+          if (generation != _playbackGeneration) {
+            return Future<void>.value();
+          }
+          return operation();
+        })
+        .catchError((Object error, StackTrace stackTrace) {
+          if (generation == _playbackGeneration) {
+            _handlePlaybackFailure();
+          }
+        });
   }
 
   Future<void> _waitForPlayback() => _playbackChain;
 
   Future<void> _ensurePlaybackConfigured() async {
+    while (_playbackDisposalOperation != null) {
+      final Future<void> disposing = _playbackDisposalOperation!;
+      await disposing;
+    }
     await _waitForPlayback();
     if (_playbackConfigured) {
       return;
     }
-    await _playback.configure();
+    final int generation = _playbackGeneration;
+    await _playback.configure(clientGeneration: generation);
+    if (generation != _playbackGeneration) {
+      return;
+    }
     _playbackConfigured = true;
     _resetPlaybackTimeline();
   }
 
   Future<void> _flushPlayback() {
+    final int generation = _playbackGeneration;
+    _playbackFlushesInFlight += 1;
     _resetPlaybackTimeline();
     _appendPlayback(_playback.flush);
-    return _playbackChain;
+    return _playbackChain.whenComplete(() {
+      if (generation == _playbackGeneration) {
+        _playbackFlushesInFlight = math.max(0, _playbackFlushesInFlight - 1);
+      }
+    });
+  }
+
+  void _invalidatePlaybackOperations() {
+    _playbackGeneration += 1;
+    _playbackFlushesInFlight = 0;
+    _playbackChain = Future<void>.value();
+    _resetPlaybackTimeline();
   }
 
   void _resetPlaybackTimeline() {
@@ -680,7 +846,10 @@ class ConversationController extends ChangeNotifier {
     _playbackFailureReported = true;
     _playbackFailures += 1;
     _audioMuted = true;
-    _resetPlaybackTimeline();
+    _invalidatePlaybackOperations();
+    _playbackConfigured = false;
+    _activeOutputRoute = AudioOutputRoute.unknown;
+    unawaited(_releasePlayback());
     _errorMessage = '译音播放失败，文字翻译仍可继续';
     notifyListeners();
   }
@@ -695,6 +864,13 @@ class ConversationController extends ChangeNotifier {
         _captureBlockedUntilMicros =
             _scheduledPlaybackEndMicros + echoGuardMicrosForRoute(route);
       }
+      return;
+    }
+    if (event is PcmPlaybackFailed) {
+      if (event.clientGeneration != _playbackGeneration) {
+        return;
+      }
+      _handlePlaybackFailure();
       return;
     }
     if (event is! PcmPlaybackInterrupted) {
@@ -818,8 +994,17 @@ class ConversationController extends ChangeNotifier {
     if (_diagnosticStartedMicros != null && _diagnosticStoppedMicros == null) {
       _directionSwitches += 1;
     }
-    _sessions[_activeSpeaker]?.endAudioStream();
-    _commitTurn(_activeSpeaker);
+    final SpeakerSide previousSide = _activeSpeaker;
+    try {
+      _sessions[previousSide]?.endAudioStream();
+    } catch (_) {
+      // Direction switching remains usable even if the old transport has
+      // already closed between its ready signal and the turn boundary.
+    }
+    _commitTurn(previousSide);
+    final Future<void>? retiringPrevious = _captureSubscription == null
+        ? null
+        : _retireSession(previousSide);
     _activeSpeaker = side;
     _errorMessage = null;
     if (_captureSubscription != null) {
@@ -841,6 +1026,18 @@ class ConversationController extends ChangeNotifier {
             side == _activeSpeaker &&
             _captureSubscription != null) {
           _phase = ConversationPhase.listening;
+          if (retiringPrevious != null) {
+            unawaited(
+              retiringPrevious
+                  .then((_) {
+                    if (_isCurrentConversation(generation) &&
+                        _activeSpeaker != previousSide) {
+                      return _ensureSession(previousSide);
+                    }
+                  })
+                  .catchError((Object _) {}),
+            );
+          }
         }
       } catch (_) {
         if (_isCurrentConversation(generation) && side == _activeSpeaker) {
@@ -849,6 +1046,16 @@ class ConversationController extends ChangeNotifier {
       }
     }
     notifyListeners();
+  }
+
+  Future<void> _retireSession(SpeakerSide side) async {
+    final StreamSubscription<LiveEvent>? subscription = _sessionSubscriptions
+        .remove(side);
+    final LiveTranslationSession? session = _sessions.remove(side);
+    await Future.wait(<Future<void>>[
+      _cancelSubscriptionBestEffort(subscription),
+      if (session != null) _runCleanupBestEffort(session.close),
+    ]);
   }
 
   Future<void> setLanguage(
@@ -894,8 +1101,8 @@ class ConversationController extends ChangeNotifier {
   }
 
   void toggleAudioMuted() {
-    _audioMuted = !_audioMuted;
-    if (_audioMuted) {
+    if (!_audioMuted) {
+      _audioMuted = true;
       if (_replayingTurnId != null || _replayOperation != null) {
         unawaited(stopReplay());
       } else {
@@ -903,8 +1110,24 @@ class ConversationController extends ChangeNotifier {
       }
     } else {
       _playbackFailureReported = false;
+      unawaited(_restoreAudioOutput());
     }
     notifyListeners();
+  }
+
+  Future<void> _restoreAudioOutput() async {
+    try {
+      await _ensurePlaybackConfigured();
+      if (_disposed || _playbackFailureReported) {
+        return;
+      }
+      _audioMuted = false;
+      _errorMessage = null;
+      notifyListeners();
+    } catch (_) {
+      _playbackFailureReported = false;
+      _handlePlaybackFailure();
+    }
   }
 
   void clearHistory() {
@@ -1059,35 +1282,79 @@ class ConversationController extends ChangeNotifier {
     ConversationPhase? finalPhase,
     String? finalError,
   }) {
+    _mergePendingStopOutcome(
+      preserveError: preserveError,
+      finalPhase: finalPhase,
+      finalError: finalError,
+    );
     final Future<void>? inFlight = _stopOperation;
     if (inFlight != null) {
       return inFlight;
     }
-    late final Future<void> operation;
-    operation =
-        _stopConversationInternal(
-          preserveError: preserveError,
-          finalPhase: finalPhase,
-          finalError: finalError,
-        ).whenComplete(() {
-          if (identical(_stopOperation, operation)) {
-            _stopOperation = null;
-            if (!_disposed) {
-              notifyListeners();
-            }
-          }
-        });
+    final Completer<void> operationCompleter = Completer<void>();
+    final Future<void> operation = operationCompleter.future;
     _stopOperation = operation;
+    unawaited(
+      _runStopOperation(
+        operationCompleter: operationCompleter,
+        operation: operation,
+        preserveError: preserveError,
+      ),
+    );
     return operation;
   }
 
-  Future<void> _stopConversationInternal({
+  Future<void> _runStopOperation({
+    required Completer<void> operationCompleter,
+    required Future<void> operation,
+    required bool preserveError,
+  }) async {
+    Object? failure;
+    StackTrace? failureStackTrace;
+    try {
+      await _stopConversationInternal(preserveError: preserveError);
+    } catch (error, stackTrace) {
+      failure = error;
+      failureStackTrace = stackTrace;
+    }
+    if (identical(_stopOperation, operation)) {
+      _stopOperation = null;
+      _pendingStopPreserveError = false;
+      _pendingStopFinalPhase = null;
+      _pendingStopFinalError = null;
+      if (!_disposed) {
+        notifyListeners();
+      }
+    }
+    if (failure == null) {
+      operationCompleter.complete();
+    } else {
+      operationCompleter.completeError(failure, failureStackTrace);
+    }
+  }
+
+  void _mergePendingStopOutcome({
     required bool preserveError,
     ConversationPhase? finalPhase,
     String? finalError,
-  }) async {
-    await stopReplay();
+  }) {
+    _pendingStopPreserveError =
+        _pendingStopPreserveError || preserveError || finalPhase != null;
+    if (finalPhase != null) {
+      _pendingStopFinalPhase = finalPhase;
+    }
+    if (finalError != null) {
+      _pendingStopFinalError = finalError;
+    }
+  }
+
+  Future<void> _stopConversationInternal({required bool preserveError}) async {
+    // Invalidate every producer synchronously before the first await. This is
+    // the user-visible stop boundary: no slow playback flush or socket close
+    // may allow another microphone frame into the transport.
     _conversationGeneration += 1;
+    _cancelReplayState();
+    _invalidatePlaybackOperations();
     if (_diagnosticStartedMicros != null) {
       _diagnosticStoppedMicros ??= _monotonicMicros();
     }
@@ -1100,19 +1367,29 @@ class ConversationController extends ChangeNotifier {
     final StreamSubscription<Uint8List>? captureSubscription =
         _captureSubscription;
     _captureSubscription = null;
-    await _cancelSubscriptionBestEffort(captureSubscription);
-    await _runCleanupBestEffort(_audioCapture.stop);
-    await _closeSessionsBestEffort();
-    await _runCleanupBestEffort(_flushPlayback);
-    await _runCleanupBestEffort(_releasePlayback);
-    if (!preserveError) {
+
+    // Start independent cleanup owners together. Playback dispose is the
+    // authoritative native stop/flush/release path and intentionally bypasses
+    // an old serialized enqueue chain that may never complete.
+    await Future.wait(<Future<void>>[
+      _cancelSubscriptionBestEffort(captureSubscription),
+      _runAuthoritativeCleanup(_audioCapture.stop),
+      _closeSessionsBestEffort(),
+      _runAuthoritativeCleanup(_releasePlayback),
+    ]);
+
+    final bool effectivePreserveError =
+        preserveError || _pendingStopPreserveError;
+    final ConversationPhase? effectiveFinalPhase = _pendingStopFinalPhase;
+    final String? effectiveFinalError = _pendingStopFinalError;
+    if (!effectivePreserveError) {
       _errorMessage = null;
-    } else if (finalError != null) {
-      _errorMessage = finalError;
+    } else if (effectiveFinalError != null) {
+      _errorMessage = effectiveFinalError;
     }
     if (!_disposed) {
       _phase =
-          finalPhase ??
+          effectiveFinalPhase ??
           (hasApiKey ? ConversationPhase.idle : ConversationPhase.needsKey);
       notifyListeners();
     }
@@ -1140,28 +1417,140 @@ class ConversationController extends ChangeNotifier {
     );
   }
 
+  void _invalidateApiKeyAfterAuthenticationFailure(String userMessage) {
+    if (_disposed || _keyInvalidationOperation != null) {
+      return;
+    }
+    final String detail = userMessage.trim();
+    final String message = detail.isEmpty
+        ? 'API Key 无效或已失效，请更新 Key 后重试'
+        : '$detail；请更新 API Key 后重试';
+    _apiKey = '';
+    _rememberKey = false;
+    _setKeyPersistenceIntent(null);
+    _phase = ConversationPhase.needsKey;
+    _errorMessage = message;
+    if (_diagnosticStartedMicros != null) {
+      _diagnosticStoppedMicros ??= _monotonicMicros();
+    }
+    notifyListeners();
+
+    // Register the invalidation before starting cleanup. A synchronous stream
+    // can emit another authentication failure from endAudioStream/close.
+    final Completer<void> completer = Completer<void>();
+    final Future<void> operation = completer.future;
+    _keyInvalidationOperation = operation;
+    unawaited(
+      _runApiKeyInvalidation(message).whenComplete(() {
+        if (identical(_keyInvalidationOperation, operation)) {
+          _keyInvalidationOperation = null;
+        }
+        completer.complete();
+      }),
+    );
+  }
+
+  Future<void> _runApiKeyInvalidation(String message) async {
+    final List<Object?> results = await Future.wait<Object?>(<Future<Object?>>[
+      _stopConversationWithOutcome(
+        preserveError: true,
+        finalPhase: ConversationPhase.needsKey,
+        finalError: message,
+      ).then<Object?>((_) => null, onError: (Object _, StackTrace _) => null),
+      _deleteInvalidPersistedKey(),
+    ]);
+    if (results[1] == true || _disposed) {
+      return;
+    }
+    _phase = ConversationPhase.needsKey;
+    _errorMessage = '$message；无法清除设备中已保存的旧 Key，请用新 Key 覆盖或清除应用数据';
+    notifyListeners();
+  }
+
+  Future<bool> _deleteInvalidPersistedKey() async {
+    final Future<void> deletion = _keyStore.delete();
+    try {
+      await deletion.timeout(cleanupTimeout);
+      _persistedKeyState = _PersistedKeyState.absent;
+      return true;
+    } on TimeoutException {
+      _persistedKeyState = _PersistedKeyState.unknown;
+      // Future.timeout does not cancel secure-storage work. If this delete
+      // eventually wins after a replacement Key has been saved, reconcile the
+      // latest persistence intent so the stale mutation cannot erase it.
+      unawaited(
+        deletion.then(
+          (_) => _reconcileKeyPersistenceIntent(),
+          onError: (Object _, StackTrace _) {},
+        ),
+      );
+      return false;
+    } catch (_) {
+      // The invalid key is already gone from process memory. A replacement
+      // key can still overwrite an undeletable secure-storage copy.
+      _persistedKeyState = _PersistedKeyState.unknown;
+      return false;
+    }
+  }
+
+  void _setKeyPersistenceIntent(String? key) {
+    _desiredPersistedKey = key;
+    _keyPersistenceIntentGeneration += 1;
+  }
+
+  Future<void> _reconcileKeyPersistenceIntent() async {
+    while (true) {
+      final int generation = _keyPersistenceIntentGeneration;
+      final String? desiredKey = _desiredPersistedKey;
+      try {
+        if (desiredKey == null) {
+          await _keyStore.delete();
+        } else {
+          await _keyStore.write(desiredKey);
+        }
+      } catch (_) {
+        if (generation == _keyPersistenceIntentGeneration) {
+          _persistedKeyState = _PersistedKeyState.unknown;
+          if (!_disposed) {
+            _errorMessage = desiredKey == null
+                ? '无法确认设备中的 API Key 已清除，请清除应用数据'
+                : 'Key 当前可用，但无法确认已安全保存；请重试保存';
+            notifyListeners();
+          }
+          return;
+        }
+      }
+      if (generation != _keyPersistenceIntentGeneration) {
+        continue;
+      }
+      _persistedKeyState = desiredKey == null
+          ? _PersistedKeyState.absent
+          : _PersistedKeyState.present;
+      return;
+    }
+  }
+
   Future<void> _closeSessionsBestEffort() async {
     final List<StreamSubscription<LiveEvent>> subscriptions =
         _sessionSubscriptions.values.toList(growable: false);
     _sessionSubscriptions.clear();
-    for (final StreamSubscription<LiveEvent> subscription in subscriptions) {
-      await _cancelSubscriptionBestEffort(subscription);
-    }
-
     final List<LiveTranslationSession> sessions = _sessions.values.toList(
       growable: false,
     );
     _sessions.clear();
-    for (final LiveTranslationSession session in sessions) {
-      await _runCleanupBestEffort(session.close);
-    }
+    await Future.wait(<Future<void>>[
+      for (final StreamSubscription<LiveEvent> subscription in subscriptions)
+        _cancelSubscriptionBestEffort(subscription),
+      for (final LiveTranslationSession session in sessions)
+        _runCleanupBestEffort(session.close),
+    ]);
   }
 
   Future<void> _cancelSubscriptionBestEffort<T>(
     StreamSubscription<T>? subscription,
   ) async {
     try {
-      await subscription?.cancel();
+      await subscription?.cancel().timeout(cleanupTimeout);
     } catch (_) {
       // Continue releasing independent resources after a callback race.
     }
@@ -1169,14 +1558,41 @@ class ConversationController extends ChangeNotifier {
 
   Future<void> _runCleanupBestEffort(Future<void> Function() operation) async {
     try {
-      await operation();
+      await operation().timeout(cleanupTimeout);
     } catch (_) {
       // Cleanup is intentionally independent: one failed adapter or transport
       // must never leave the remaining recorder, sessions, or player alive.
     }
   }
 
-  Future<void> _releasePlayback() async {
+  Future<void> _runAuthoritativeCleanup(
+    Future<void> Function() operation,
+  ) async {
+    try {
+      await operation();
+    } catch (_) {
+      // Media owners cannot be safely reused while an old stop/dispose is
+      // still running. Wait for completion, but isolate a terminal failure so
+      // the other independent cleanup owners still settle.
+    }
+  }
+
+  Future<void> _releasePlayback() {
+    final Future<void>? existing = _playbackDisposalOperation;
+    if (existing != null) {
+      return existing;
+    }
+    late final Future<void> operation;
+    operation = _releasePlaybackNow().whenComplete(() {
+      if (identical(_playbackDisposalOperation, operation)) {
+        _playbackDisposalOperation = null;
+      }
+    });
+    _playbackDisposalOperation = operation;
+    return operation;
+  }
+
+  Future<void> _releasePlaybackNow() async {
     try {
       await _playback.dispose();
     } catch (_) {
@@ -1309,7 +1725,7 @@ class ConversationController extends ChangeNotifier {
   Future<void> _disposeResources() async {
     final Future<void>? stopOperation = _stopOperation;
     if (stopOperation != null) {
-      await _runCleanupBestEffort(() => stopOperation);
+      await _runAuthoritativeCleanup(() => stopOperation);
     }
     await _runCleanupBestEffort(stopReplay);
     try {
@@ -1333,9 +1749,9 @@ class ConversationController extends ChangeNotifier {
     } finally {
       _captureSubscription = null;
     }
-    await _runCleanupBestEffort(_audioCapture.dispose);
+    await _runAuthoritativeCleanup(_audioCapture.dispose);
     await _closeSessionsBestEffort();
     await _runCleanupBestEffort(_flushPlayback);
-    await _runCleanupBestEffort(_releasePlayback);
+    await _runAuthoritativeCleanup(_releasePlayback);
   }
 }

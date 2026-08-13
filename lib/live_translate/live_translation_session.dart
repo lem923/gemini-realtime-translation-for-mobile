@@ -30,15 +30,22 @@ class GeminiLiveSession implements LiveTranslationSession {
     required this.apiKey,
     required this.targetLanguageCode,
     Uri? endpoint,
-  }) : endpoint = endpoint ?? Uri.parse(GeminiLiveProtocol.endpoint);
+    HttpClient Function()? httpClientFactory,
+    WebSocketChannel Function(Uri uri, HttpClient client)? channelFactory,
+  }) : endpoint = endpoint ?? Uri.parse(GeminiLiveProtocol.endpoint),
+       _httpClientFactory = httpClientFactory ?? HttpClient.new,
+       _channelFactory = channelFactory ?? _connectChannel;
 
   final String apiKey;
   final String targetLanguageCode;
   final Uri endpoint;
+  final HttpClient Function() _httpClientFactory;
+  final WebSocketChannel Function(Uri uri, HttpClient client) _channelFactory;
+  static const Duration _cleanupTimeout = Duration(milliseconds: 250);
   final StreamController<LiveEvent> _events =
       StreamController<LiveEvent>.broadcast();
 
-  IOWebSocketChannel? _channel;
+  WebSocketChannel? _channel;
   HttpClient? _httpClient;
   // The subscription is cancelled on replacement and close.
   // ignore: cancel_subscriptions
@@ -46,6 +53,7 @@ class GeminiLiveSession implements LiveTranslationSession {
   Completer<void>? _setupCompleter;
   Timer? _reconnectTimer;
   Future<void>? _connectOperation;
+  Future<void>? _closeOperation;
   String? _resumptionHandle;
   int _generation = 0;
   int _reconnectAttempt = 0;
@@ -89,14 +97,12 @@ class GeminiLiveSession implements LiveTranslationSession {
     if (_disposed || generation != _generation) {
       return;
     }
-    final HttpClient httpClient = HttpClient()
+    final HttpClient httpClient = _httpClientFactory()
       ..findProxy = _findProxyForWebSocket;
     _httpClient = httpClient;
-    final IOWebSocketChannel channel = IOWebSocketChannel.connect(
+    final WebSocketChannel channel = _channelFactory(
       endpoint.replace(queryParameters: <String, String>{'key': apiKey}),
-      pingInterval: const Duration(seconds: 20),
-      connectTimeout: const Duration(seconds: 15),
-      customClient: httpClient,
+      httpClient,
     );
     _channel = channel;
     final Completer<void> setupCompleter = Completer<void>();
@@ -206,6 +212,15 @@ class GeminiLiveSession implements LiveTranslationSession {
     return HttpClient.findProxyFromEnvironment(proxyLookupUri);
   }
 
+  static WebSocketChannel _connectChannel(Uri uri, HttpClient client) {
+    return IOWebSocketChannel.connect(
+      uri,
+      pingInterval: const Duration(seconds: 20),
+      connectTimeout: const Duration(seconds: 15),
+      customClient: client,
+    );
+  }
+
   Future<void> _discardChannel(int generation) async {
     if (generation != _generation) {
       return;
@@ -217,20 +232,41 @@ class GeminiLiveSession implements LiveTranslationSession {
   Future<void> _replaceChannel(int generation) async {
     final StreamSubscription<Object?>? subscription = _subscription;
     _subscription = null;
-    await subscription?.cancel();
-    final IOWebSocketChannel? channel = _channel;
+    final WebSocketChannel? channel = _channel;
     _channel = null;
-    _httpClient?.close(force: true);
+    final HttpClient? httpClient = _httpClient;
     _httpClient = null;
-    if (channel != null) {
-      // `dart:io` does not allow a client to send the server-only 1001
-      // Going Away code. A Gemini connection can itself finish with 1001;
-      // normalise our local replacement close to 1000 so reconnect remains
-      // valid even when the old channel has already observed that server code.
-      await channel.sink.close(status.normalClosure).catchError((Object _) {});
-    }
     if (generation == _generation) {
       _setupCompleter = null;
+    }
+    try {
+      httpClient?.close(force: true);
+    } catch (_) {
+      // Ownership is already detached; continue settling the other resources.
+    }
+
+    await Future.wait<void>(<Future<void>>[
+      if (subscription != null)
+        _settleCleanup(() async {
+          await subscription.cancel();
+        }),
+      if (channel != null)
+        _settleCleanup(() async {
+          // `dart:io` does not allow a client to send the server-only 1001
+          // Going Away code. A Gemini connection can itself finish with 1001;
+          // normalise our local replacement close to 1000 so reconnect remains
+          // valid even when the old channel has already observed that code.
+          await channel.sink.close(status.normalClosure);
+        }),
+    ]);
+  }
+
+  Future<void> _settleCleanup(Future<void> Function() cleanup) async {
+    try {
+      await Future<void>.sync(cleanup).timeout(_cleanupTimeout);
+    } catch (_) {
+      // Ownership has already been cleared and the HttpClient force-closed.
+      // A broken adapter must not strand reconnect or session shutdown.
     }
   }
 
@@ -396,10 +432,17 @@ class GeminiLiveSession implements LiveTranslationSession {
   }
 
   @override
-  Future<void> close() async {
-    if (_disposed) {
-      return;
+  Future<void> close() {
+    final Future<void>? inFlight = _closeOperation;
+    if (inFlight != null) {
+      return inFlight;
     }
+    final Future<void> operation = _closeInternal();
+    _closeOperation = operation;
+    return operation;
+  }
+
+  Future<void> _closeInternal() async {
     _disposed = true;
     _ready = false;
     _generation += 1;
@@ -410,26 +453,7 @@ class GeminiLiveSession implements LiveTranslationSession {
     if (setupCompleter != null && !setupCompleter.isCompleted) {
       setupCompleter.completeError(StateError('Gemini session was closed'));
     }
-    final StreamSubscription<Object?>? subscription = _subscription;
-    _subscription = null;
-    try {
-      await subscription?.cancel();
-    } catch (_) {
-      // Continue releasing the socket and event stream even if cancellation
-      // races a transport failure.
-    }
-    final IOWebSocketChannel? channel = _channel;
-    _channel = null;
-    if (channel != null) {
-      try {
-        await channel.sink.close(status.normalClosure);
-      } catch (_) {
-        // The peer may already have torn down the transport. The HttpClient
-        // close below remains the authoritative local release.
-      }
-    }
-    _httpClient?.close(force: true);
-    _httpClient = null;
+    await _replaceChannel(_generation);
     if (!_events.isClosed) {
       _events.add(const LivePhaseChanged(LiveSessionPhase.closed));
       await _events.close();

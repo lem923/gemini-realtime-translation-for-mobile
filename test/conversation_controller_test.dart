@@ -85,6 +85,128 @@ void main() {
     },
   );
 
+  test(
+    'secure write failure falls back to a truthful memory-only key',
+    () async {
+      final _FaultyKeyStore store = _FaultyKeyStore(failWrite: true);
+      final ConversationController controller = ConversationController(
+        keyStore: store,
+        audioCapture: _FakeAudioCapture(),
+        playback: _FakePlayback(),
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) =>
+                _FakeLiveSession(),
+      );
+
+      await controller.initialize();
+
+      expect(
+        await controller.validateAndSaveApiKey(
+          candidate: 'memory-fallback-key',
+          remember: true,
+        ),
+        isTrue,
+      );
+      expect(controller.hasApiKey, isTrue);
+      expect(controller.rememberKey, isFalse);
+      expect(controller.phase, ConversationPhase.idle);
+      expect(controller.errorMessage, contains('仅保存在内存中'));
+      expect(store.value, isNull);
+      expect(store.deleteCount, 1);
+      controller.dispose();
+    },
+  );
+
+  test(
+    'known-empty storage does not block the default memory-only key',
+    () async {
+      final _FaultyKeyStore store = _FaultyKeyStore(failDelete: true);
+      final ConversationController controller = ConversationController(
+        keyStore: store,
+        audioCapture: _FakeAudioCapture(),
+        playback: _FakePlayback(),
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) =>
+                _FakeLiveSession(),
+      );
+
+      await controller.initialize();
+
+      expect(
+        await controller.validateAndSaveApiKey(
+          candidate: 'memory-only-key',
+          remember: false,
+        ),
+        isTrue,
+      );
+      expect(controller.hasApiKey, isTrue);
+      expect(controller.phase, ConversationPhase.idle);
+      expect(controller.errorMessage, isNull);
+      expect(store.deleteCount, 0);
+      controller.dispose();
+    },
+  );
+
+  test(
+    'unknown secure storage keeps a valid key usable with a warning',
+    () async {
+      final _FaultyKeyStore store = _FaultyKeyStore(
+        failRead: true,
+        failDelete: true,
+      );
+      final ConversationController controller = ConversationController(
+        keyStore: store,
+        audioCapture: _FakeAudioCapture(),
+        playback: _FakePlayback(),
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) =>
+                _FakeLiveSession(),
+      );
+
+      await controller.initialize();
+      expect(
+        await controller.validateAndSaveApiKey(
+          candidate: 'usable-despite-storage-warning',
+          remember: false,
+        ),
+        isTrue,
+      );
+      expect(controller.hasApiKey, isTrue);
+      expect(controller.rememberKey, isFalse);
+      expect(controller.phase, ConversationPhase.idle);
+      expect(controller.errorMessage, contains('设备副本'));
+      expect(store.deleteCount, 1);
+      controller.dispose();
+    },
+  );
+
+  test('remove key clears memory even when secure deletion fails', () async {
+    final _FaultyKeyStore store = _FaultyKeyStore(
+      value: 'persisted-key',
+      failDelete: true,
+    );
+    final ConversationController controller = ConversationController(
+      keyStore: store,
+      audioCapture: _FakeAudioCapture(),
+      playback: _FakePlayback(),
+      sessionFactory:
+          ({required String apiKey, required String targetLanguageCode}) =>
+              _FakeLiveSession(),
+    );
+
+    await controller.initialize();
+    expect(controller.hasApiKey, isTrue);
+
+    await controller.removeApiKey();
+
+    expect(controller.hasApiKey, isFalse);
+    expect(controller.rememberKey, isFalse);
+    expect(controller.phase, ConversationPhase.needsKey);
+    expect(controller.errorMessage, contains('清除应用数据'));
+    expect(store.value, 'persisted-key');
+    controller.dispose();
+  });
+
   test('restores and persists only the last valid language pair', () async {
     final _MemoryLanguagePairStore languageStore = _MemoryLanguagePairStore(
       const StoredLanguagePair(languageA: 'ja', languageB: 'fr'),
@@ -327,7 +449,8 @@ void main() {
       ]);
 
       await controller.selectSpeaker(SpeakerSide.a);
-      sessions[0]
+      await _flushEvents();
+      sessions[2]
         ..emit(const LiveInputTranscript('hello', 'en'))
         ..emit(const LiveOutputTranscript('你好', 'zh-Hans'))
         ..emit(LiveAudioChunk(Uint8List.fromList(<int>[5, 6, 7, 8])))
@@ -470,6 +593,49 @@ void main() {
     },
   );
 
+  test(
+    'interruption closes the partial turn before the next utterance',
+    () async {
+      final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
+      final ConversationController controller = ConversationController(
+        keyStore: _MemoryKeyStore('stored-key'),
+        audioCapture: _FakeAudioCapture(),
+        playback: _FakePlayback(),
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) {
+              final _FakeLiveSession session = _FakeLiveSession();
+              sessions.add(session);
+              return session;
+            },
+      );
+
+      await controller.initialize();
+      await controller.startConversation();
+      sessions.first
+        ..emit(const LiveInputTranscript('first source', 'en'))
+        ..emit(const LiveOutputTranscript('first target', 'zh-Hans'))
+        ..emit(LiveAudioChunk(Uint8List.fromList(<int>[1, 2])))
+        ..emit(const LiveInterrupted());
+      await _flushEvents();
+
+      expect(controller.turns, hasLength(1));
+      expect(controller.turns.single.sourceText, 'first source');
+      expect(controller.hasReplayAudio(controller.turns.single.id), isFalse);
+
+      sessions.first
+        ..emit(const LiveInputTranscript('second source', 'en'))
+        ..emit(const LiveOutputTranscript('second target', 'zh-Hans'))
+        ..emit(const LiveTurnComplete());
+      await _flushEvents();
+
+      expect(controller.turns, hasLength(2));
+      expect(controller.turns.last.sourceText, 'second source');
+      expect(controller.turns.last.translatedText, 'second target');
+      await controller.stopConversation();
+      controller.dispose();
+    },
+  );
+
   test('ignores late events from the inactive speaker session', () async {
     final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
     final ConversationController controller = ConversationController(
@@ -478,7 +644,11 @@ void main() {
       playback: _FakePlayback(),
       sessionFactory:
           ({required String apiKey, required String targetLanguageCode}) {
-            final _FakeLiveSession session = _FakeLiveSession();
+            final _FakeLiveSession session = _FakeLiveSession(
+              closeError: sessions.isEmpty
+                  ? StateError('stale listener survives close')
+                  : null,
+            );
             sessions.add(session);
             return session;
           },
@@ -503,7 +673,15 @@ void main() {
     await controller.selectSpeaker(SpeakerSide.a);
     expect(controller.interimSource, isEmpty);
     expect(controller.interimTranslation, isEmpty);
+    await _flushEvents();
+    expect(sessions, hasLength(greaterThanOrEqualTo(3)));
+    final _FakeLiveSession reactivatedA = sessions[2];
     sessions.first
+      ..emit(const LiveInputTranscript('very stale source', 'en'))
+      ..emit(const LiveOutputTranscript('非常过期', 'zh-Hans'))
+      ..emit(LiveAudioChunk(Uint8List(4800)))
+      ..emit(const LiveTurnComplete());
+    reactivatedA
       ..emit(const LiveInputTranscript('fresh source', 'en'))
       ..emit(const LiveOutputTranscript('新译文', 'zh-Hans'))
       ..emit(const LiveTurnComplete());
@@ -559,13 +737,14 @@ void main() {
     },
   );
 
-  test('stop waits for pending playback before flushing', () async {
+  test('stop detaches capture without waiting for pending playback', () async {
     final Completer<void> enqueueGate = Completer<void>();
+    final _FakeAudioCapture capture = _FakeAudioCapture();
     final _FakePlayback playback = _FakePlayback(enqueueGate: enqueueGate);
     final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
     final ConversationController controller = ConversationController(
       keyStore: _MemoryKeyStore('stored-key'),
-      audioCapture: _FakeAudioCapture(),
+      audioCapture: capture,
       playback: playback,
       sessionFactory:
           ({required String apiKey, required String targetLanguageCode}) {
@@ -581,16 +760,13 @@ void main() {
     await _flushEvents();
     final Future<void> stopping = controller.stopConversation();
     await _flushEvents();
-    expect(playback.operations, <String>['configure', 'enqueue']);
+    capture.emit(<int>[9, 9]);
+    expect(sessions.first.audio, isEmpty);
+    expect(playback.operations, <String>['configure', 'enqueue', 'dispose']);
 
-    enqueueGate.complete();
     await stopping;
-    expect(playback.operations, <String>[
-      'configure',
-      'enqueue',
-      'flush',
-      'dispose',
-    ]);
+    expect(controller.phase, ConversationPhase.idle);
+    enqueueGate.complete();
     controller.dispose();
   });
 
@@ -733,7 +909,141 @@ void main() {
       expect(controller.audioMuted, isTrue);
       expect(controller.errorMessage, contains('文字翻译'));
       await controller.stopConversation(preserveError: true);
-      expect(playback.operations, contains('flush'));
+      expect(playback.operations, contains('dispose'));
+      controller.dispose();
+    },
+  );
+
+  test(
+    'native playback failure event falls back to text and can recover',
+    () async {
+      final _FakePlayback playback = _FakePlayback();
+      final ConversationController controller = ConversationController(
+        keyStore: _MemoryKeyStore('stored-key'),
+        audioCapture: _FakeAudioCapture(),
+        playback: playback,
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) =>
+                _FakeLiveSession(),
+      );
+
+      await controller.initialize();
+      await controller.startConversation();
+      playback.emitFailure();
+      await _flushEvents();
+
+      expect(controller.audioMuted, isTrue);
+      expect(controller.errorMessage, contains('文字翻译'));
+      expect(playback.disposeCount, greaterThanOrEqualTo(1));
+
+      controller.toggleAudioMuted();
+      await _flushEvents();
+      expect(controller.audioMuted, isFalse);
+      expect(
+        playback.operations.where((value) => value == 'configure').length,
+        2,
+      );
+      await controller.stopConversation();
+      controller.dispose();
+    },
+  );
+
+  test('ignores a playback failure from an older native run', () async {
+    final _FakePlayback playback = _FakePlayback();
+    final ConversationController controller = ConversationController(
+      keyStore: _MemoryKeyStore('stored-key'),
+      audioCapture: _FakeAudioCapture(),
+      playback: playback,
+      sessionFactory:
+          ({required String apiKey, required String targetLanguageCode}) =>
+              _FakeLiveSession(),
+    );
+
+    await controller.initialize();
+    await controller.startConversation();
+    final int oldGeneration = playback.configuredClientGeneration!;
+    await controller.stopConversation();
+    await controller.startConversation();
+    expect(playback.configuredClientGeneration, isNot(oldGeneration));
+
+    playback.emitFailure(clientGeneration: oldGeneration);
+    await _flushEvents();
+
+    expect(controller.audioMuted, isFalse);
+    expect(controller.errorMessage, isNull);
+    expect(controller.phase, ConversationPhase.listening);
+    await controller.stopConversation();
+    controller.dispose();
+  });
+
+  test('audio restore waits for failed native playback disposal', () async {
+    final Completer<void> disposeGate = Completer<void>();
+    final _FakePlayback playback = _FakePlayback(disposeGate: disposeGate);
+    final ConversationController controller = ConversationController(
+      keyStore: _MemoryKeyStore('stored-key'),
+      audioCapture: _FakeAudioCapture(),
+      playback: playback,
+      sessionFactory:
+          ({required String apiKey, required String targetLanguageCode}) =>
+              _FakeLiveSession(),
+    );
+
+    await controller.initialize();
+    await controller.startConversation();
+    playback.emitFailure();
+    await _flushEvents();
+    controller.toggleAudioMuted();
+    await _flushEvents();
+
+    expect(
+      playback.operations.where((String value) => value == 'configure'),
+      hasLength(1),
+    );
+    expect(controller.audioMuted, isTrue);
+
+    disposeGate.complete();
+    await _flushEvents();
+    await _flushEvents();
+    expect(
+      playback.operations.where((String value) => value == 'configure'),
+      hasLength(2),
+    );
+    expect(controller.audioMuted, isFalse);
+    await controller.stopConversation();
+    controller.dispose();
+  });
+
+  test(
+    'stop does not reuse playback before authoritative disposal settles',
+    () async {
+      final Completer<void> disposeGate = Completer<void>();
+      final _FakePlayback playback = _FakePlayback(disposeGate: disposeGate);
+      final ConversationController controller = ConversationController(
+        keyStore: _MemoryKeyStore('stored-key'),
+        audioCapture: _FakeAudioCapture(),
+        playback: playback,
+        cleanupTimeout: const Duration(milliseconds: 1),
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) =>
+                _FakeLiveSession(),
+      );
+
+      await controller.initialize();
+      await controller.startConversation();
+      var stopped = false;
+      final Future<void> stopping = controller.stopConversation().whenComplete(
+        () => stopped = true,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+
+      expect(stopped, isFalse);
+      disposeGate.complete();
+      await stopping;
+      expect(controller.phase, ConversationPhase.idle);
+
+      await controller.startConversation();
+      expect(controller.phase, ConversationPhase.listening);
+      await controller.stopConversation();
       controller.dispose();
     },
   );
@@ -768,7 +1078,7 @@ void main() {
       expect(controller.errorMessage, contains('系统中断'));
       expect(capture.stopped, isTrue);
       expect(sessions.every((session) => session.closed), isTrue);
-      expect(playback.operations, contains('flush'));
+      expect(playback.operations, contains('dispose'));
       final ConversationDiagnostics diagnostics = await controller
           .collectDiagnostics();
       expect(diagnostics.audioInterruptions, 1);
@@ -1020,6 +1330,51 @@ void main() {
     controller.dispose();
   });
 
+  test(
+    'switching speaker during initial connect routes capture to latest side',
+    () async {
+      final Completer<void> speakerAGate = Completer<void>();
+      final _FakeAudioCapture capture = _FakeAudioCapture();
+      final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
+      final ConversationController controller = ConversationController(
+        keyStore: _MemoryKeyStore('stored-key'),
+        audioCapture: capture,
+        playback: _FakePlayback(),
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) {
+              final _FakeLiveSession session = _FakeLiveSession(
+                connectGate: sessions.isEmpty ? speakerAGate : null,
+              );
+              sessions.add(session);
+              return session;
+            },
+      );
+
+      await controller.initialize();
+      final Future<void> starting = controller.startConversation();
+      await _flushEvents();
+      expect(sessions, hasLength(1));
+      expect(controller.phase, ConversationPhase.connecting);
+
+      await controller.selectSpeaker(SpeakerSide.b);
+      expect(controller.activeSpeaker, SpeakerSide.b);
+      speakerAGate.complete();
+      await starting;
+      await _flushEvents();
+
+      expect(sessions, hasLength(2));
+      expect(controller.phase, ConversationPhase.listening);
+      capture.emit(<int>[4, 2]);
+      await _flushEvents();
+      expect(sessions[0].audio, isEmpty);
+      expect(sessions[1].audio, <List<int>>[
+        <int>[4, 2],
+      ]);
+      await controller.stopConversation();
+      controller.dispose();
+    },
+  );
+
   test('coalesces simultaneous stop requests', () async {
     final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
     final ConversationController controller = ConversationController(
@@ -1079,7 +1434,7 @@ void main() {
 
     expect(sessions.every((session) => session.closeCount == 1), isTrue);
     expect(capture.stopped, isTrue);
-    expect(playback.operations, containsAll(<String>['flush', 'dispose']));
+    expect(playback.operations, contains('dispose'));
     expect(controller.phase, ConversationPhase.idle);
     controller.dispose();
   });
@@ -1097,7 +1452,7 @@ void main() {
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
               final _FakeLiveSession session = _FakeLiveSession(
-                connectGate: sessions.isEmpty ? null : speakerBGate,
+                connectGate: sessions.length == 1 ? speakerBGate : null,
               );
               sessions.add(session);
               return session;
@@ -1166,6 +1521,168 @@ void main() {
       expect(controller.errorMessage, '配额不足');
 
       await controller.stopConversation();
+      controller.dispose();
+    },
+  );
+
+  test(
+    'stored key authentication failure cleans up and accepts a replacement',
+    () async {
+      final _MemoryKeyStore store = _MemoryKeyStore('expired-stored-key');
+      final _FakeAudioCapture capture = _FakeAudioCapture();
+      final _FakePlayback playback = _FakePlayback();
+      final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
+      final List<String> requestedKeys = <String>[];
+      final ConversationController controller = ConversationController(
+        keyStore: store,
+        audioCapture: capture,
+        playback: playback,
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) {
+              requestedKeys.add(apiKey);
+              final _FakeLiveSession session = _FakeLiveSession();
+              sessions.add(session);
+              return session;
+            },
+      );
+
+      await controller.initialize();
+      await controller.startConversation();
+      expect(controller.phase, ConversationPhase.listening);
+      expect(requestedKeys.first, 'expired-stored-key');
+
+      sessions.first.emit(
+        const LiveSessionFailure(
+          userMessage: 'Gemini 拒绝了这个 API Key',
+          authenticationFailure: true,
+          retryable: false,
+        ),
+      );
+
+      expect(controller.hasApiKey, isFalse);
+      expect(controller.rememberKey, isFalse);
+      expect(controller.phase, ConversationPhase.needsKey);
+      expect(controller.errorMessage, contains('更新 API Key'));
+      await controller.stopConversation(preserveError: true);
+      await _flushEvents();
+      expect(store.value, isNull);
+      expect(capture.stopped, isTrue);
+      expect(playback.disposeCount, greaterThan(0));
+      expect(sessions.every((session) => session.closed), isTrue);
+
+      expect(
+        await controller.validateAndSaveApiKey(
+          candidate: 'replacement-key',
+          remember: true,
+        ),
+        isTrue,
+      );
+      expect(store.value, 'replacement-key');
+      expect(controller.hasApiKey, isTrue);
+      expect(controller.rememberKey, isTrue);
+      expect(controller.phase, ConversationPhase.idle);
+      expect(controller.errorMessage, isNull);
+
+      await controller.startConversation();
+      expect(requestedKeys.last, 'replacement-key');
+      expect(controller.phase, ConversationPhase.listening);
+      await controller.stopConversation();
+      controller.dispose();
+    },
+  );
+
+  test(
+    'authentication failure warns when the persisted key cannot be deleted',
+    () async {
+      final _FaultyKeyStore store = _FaultyKeyStore(
+        value: 'expired-stored-key',
+        failDelete: true,
+      );
+      final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
+      final ConversationController controller = ConversationController(
+        keyStore: store,
+        audioCapture: _FakeAudioCapture(),
+        playback: _FakePlayback(),
+        cleanupTimeout: const Duration(milliseconds: 20),
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) {
+              final _FakeLiveSession session = _FakeLiveSession();
+              sessions.add(session);
+              return session;
+            },
+      );
+
+      await controller.initialize();
+      await controller.startConversation();
+      sessions.first.emit(
+        const LiveSessionFailure(
+          userMessage: '认证失败',
+          authenticationFailure: true,
+          retryable: false,
+        ),
+      );
+      await controller.stopConversation(preserveError: true);
+      await _flushEvents();
+
+      expect(controller.hasApiKey, isFalse);
+      expect(controller.phase, ConversationPhase.needsKey);
+      expect(controller.errorMessage, contains('无法清除设备中已保存的旧 Key'));
+      expect(store.value, 'expired-stored-key');
+      controller.dispose();
+    },
+  );
+
+  test(
+    'a hanging invalid-key deletion cannot block replacement validation',
+    () async {
+      final Completer<void> deleteGate = Completer<void>();
+      final _FaultyKeyStore store = _FaultyKeyStore(
+        value: 'expired-stored-key',
+        deleteGate: deleteGate,
+      );
+      final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
+      final ConversationController controller = ConversationController(
+        keyStore: store,
+        audioCapture: _FakeAudioCapture(),
+        playback: _FakePlayback(),
+        cleanupTimeout: const Duration(milliseconds: 20),
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) {
+              final _FakeLiveSession session = _FakeLiveSession();
+              sessions.add(session);
+              return session;
+            },
+      );
+
+      await controller.initialize();
+      await controller.startConversation();
+      sessions.first.emit(
+        const LiveSessionFailure(
+          userMessage: '认证失败',
+          authenticationFailure: true,
+          retryable: false,
+        ),
+      );
+
+      expect(
+        await controller
+            .validateAndSaveApiKey(candidate: 'replacement-key', remember: true)
+            .timeout(const Duration(seconds: 1)),
+        isTrue,
+      );
+      expect(store.value, 'replacement-key');
+      expect(controller.hasApiKey, isTrue);
+      expect(controller.rememberKey, isTrue);
+      expect(controller.phase, ConversationPhase.idle);
+      expect(controller.errorMessage, isNull);
+
+      // Future.timeout does not cancel the original secure-storage delete.
+      // Its late completion must reconcile the latest remembered Key instead
+      // of erasing the replacement that was saved after the timeout.
+      deleteGate.complete();
+      await _flushEvents();
+      await _flushEvents();
+      expect(store.value, 'replacement-key');
       controller.dispose();
     },
   );
@@ -1281,6 +1798,37 @@ void main() {
   });
 
   test(
+    'permission revocation upgrades a manual stop already in flight',
+    () async {
+      final Completer<void> closeGate = Completer<void>();
+      final _FakeMicrophonePermissionGateway permissions =
+          _FakeMicrophonePermissionGateway(MicrophonePermissionStatus.granted);
+      final ConversationController controller = ConversationController(
+        keyStore: _MemoryKeyStore('stored-key'),
+        audioCapture: _FakeAudioCapture(),
+        playback: _FakePlayback(),
+        permissionGateway: permissions,
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) =>
+                _FakeLiveSession(closeGate: closeGate),
+      );
+
+      await controller.initialize();
+      await controller.startConversation();
+      final Future<void> stopping = controller.stopConversation();
+      await _flushEvents();
+      permissions.emit(MicrophonePermissionStatus.denied);
+      expect(controller.phase, ConversationPhase.permissionDenied);
+
+      closeGate.complete();
+      await stopping;
+      expect(controller.phase, ConversationPhase.permissionDenied);
+      expect(controller.errorMessage, contains('已被撤销'));
+      controller.dispose();
+    },
+  );
+
+  test(
     'microphone stream failure automatically closes live sessions',
     () async {
       final _FakeAudioCapture capture = _FakeAudioCapture();
@@ -1305,6 +1853,45 @@ void main() {
 
       expect(controller.phase, ConversationPhase.failed);
       expect(controller.errorMessage, contains('麦克风采集失败'));
+      expect(capture.stopped, isTrue);
+      expect(sessions.every((session) => session.closed), isTrue);
+      controller.dispose();
+    },
+  );
+
+  test(
+    'microphone stream completion automatically releases sessions',
+    () async {
+      final _FakeAudioCapture capture = _FakeAudioCapture();
+      final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
+      final ConversationController controller = ConversationController(
+        keyStore: _MemoryKeyStore('stored-key'),
+        audioCapture: capture,
+        playback: _FakePlayback(),
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) {
+              final _FakeLiveSession session = _FakeLiveSession();
+              sessions.add(session);
+              return session;
+            },
+      );
+
+      await controller.initialize();
+      await controller.startConversation();
+      await _flushEvents();
+
+      await capture.closeStream();
+      for (var index = 0; index < 20; index += 1) {
+        await _flushEvents();
+        if (sessions.isNotEmpty &&
+            sessions.every((session) => session.closed) &&
+            !controller.isBusy) {
+          break;
+        }
+      }
+
+      expect(controller.phase, ConversationPhase.failed);
+      expect(controller.errorMessage, contains('麦克风采集已停止'));
       expect(capture.stopped, isTrue);
       expect(sessions.every((session) => session.closed), isTrue);
       controller.dispose();
@@ -1616,6 +2203,49 @@ class _MemoryKeyStore implements ApiKeyStore {
   Future<void> write(String value) async => this.value = value;
 }
 
+class _FaultyKeyStore implements ApiKeyStore {
+  _FaultyKeyStore({
+    this.value,
+    this.failRead = false,
+    this.failWrite = false,
+    this.failDelete = false,
+    this.deleteGate,
+  });
+
+  String? value;
+  final bool failRead;
+  final bool failWrite;
+  final bool failDelete;
+  final Completer<void>? deleteGate;
+  int deleteCount = 0;
+
+  @override
+  Future<void> delete() async {
+    deleteCount += 1;
+    await deleteGate?.future;
+    if (failDelete) {
+      throw StateError('secure delete failed');
+    }
+    value = null;
+  }
+
+  @override
+  Future<String?> read() async {
+    if (failRead) {
+      throw StateError('secure read failed');
+    }
+    return value;
+  }
+
+  @override
+  Future<void> write(String value) async {
+    if (failWrite) {
+      throw StateError('secure write failed');
+    }
+    this.value = value;
+  }
+}
+
 class _MemoryLanguagePairStore implements LanguagePairStore {
   _MemoryLanguagePairStore([this.value]);
 
@@ -1645,8 +2275,14 @@ class _FakeAudioCapture implements AudioCaptureGateway {
 
   void emitError(Object error) => _controller.addError(error);
 
+  Future<void> closeStream() => _controller.close();
+
   @override
-  Future<void> dispose() async => _controller.close();
+  Future<void> dispose() async {
+    if (!_controller.isClosed) {
+      await _controller.close();
+    }
+  }
 
   @override
   Future<bool> hasPermission() async => permission;
@@ -1701,6 +2337,7 @@ class _FakePlayback implements PcmPlaybackGateway {
   _FakePlayback({
     this.enqueueGate,
     this.flushGate,
+    this.disposeGate,
     this.failNextEnqueue = false,
     this.failNextFlush = false,
     this.playbackMetrics = const PcmPlaybackMetrics.empty(),
@@ -1708,6 +2345,7 @@ class _FakePlayback implements PcmPlaybackGateway {
 
   final Completer<void>? enqueueGate;
   final Completer<void>? flushGate;
+  final Completer<void>? disposeGate;
   bool failNextEnqueue;
   bool failNextFlush;
   final PcmPlaybackMetrics playbackMetrics;
@@ -1716,8 +2354,17 @@ class _FakePlayback implements PcmPlaybackGateway {
   final List<List<int>> enqueued = <List<int>>[];
   final List<String> operations = <String>[];
   int disposeCount = 0;
+  int? configuredClientGeneration;
 
   void emitInterruption() => _events.add(const PcmPlaybackInterrupted());
+
+  void emitFailure({int? clientGeneration}) => _events.add(
+    PcmPlaybackFailed(
+      reason: 'writeError',
+      platformCode: -6,
+      clientGeneration: clientGeneration ?? configuredClientGeneration,
+    ),
+  );
 
   void emitRoute(AudioOutputRoute route) =>
       _events.add(PcmPlaybackRouteChanged(route));
@@ -1726,12 +2373,16 @@ class _FakePlayback implements PcmPlaybackGateway {
   Stream<PcmPlaybackEvent> get events => _events.stream;
 
   @override
-  Future<void> configure() async => operations.add('configure');
+  Future<void> configure({required int clientGeneration}) async {
+    configuredClientGeneration = clientGeneration;
+    operations.add('configure');
+  }
 
   @override
   Future<void> dispose() async {
     disposeCount += 1;
     operations.add('dispose');
+    await disposeGate?.future;
   }
 
   @override

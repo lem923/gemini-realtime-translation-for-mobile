@@ -28,6 +28,18 @@ class PcmPlaybackRouteChanged extends PcmPlaybackEvent {
   final AudioOutputRoute route;
 }
 
+class PcmPlaybackFailed extends PcmPlaybackEvent {
+  const PcmPlaybackFailed({
+    required this.reason,
+    this.platformCode,
+    this.clientGeneration,
+  });
+
+  final String reason;
+  final int? platformCode;
+  final int? clientGeneration;
+}
+
 const int sharedPhoneEchoGuardMicros = 300000;
 const int isolatedRouteEchoGuardMicros = 80000;
 
@@ -56,6 +68,19 @@ PcmPlaybackEvent? parsePcmPlaybackEvent(Object? value) {
       orElse: () => AudioOutputRoute.unknown,
     );
     return PcmPlaybackRouteChanged(route);
+  }
+  if (value case <Object?, Object?>{
+    'type': 'playbackFailed',
+    'reason': final String reason,
+  }) {
+    final Object? rawPlatformCode = value['platformCode'];
+    return PcmPlaybackFailed(
+      reason: reason,
+      platformCode: rawPlatformCode is int ? rawPlatformCode : null,
+      clientGeneration: value['clientGeneration'] is int
+          ? value['clientGeneration']! as int
+          : null,
+    );
   }
   return null;
 }
@@ -114,7 +139,7 @@ class PcmPlaybackMetrics {
 
 abstract interface class PcmPlaybackGateway {
   Stream<PcmPlaybackEvent> get events;
-  Future<void> configure();
+  Future<void> configure({required int clientGeneration});
   Future<void> enqueue(Uint8List pcm);
   Future<void> flush();
   Future<PcmPlaybackMetrics> metrics();
@@ -137,10 +162,11 @@ class PlatformPcmPlaybackGateway implements PcmPlaybackGateway {
       .cast<PcmPlaybackEvent>();
 
   @override
-  Future<void> configure() =>
+  Future<void> configure({required int clientGeneration}) =>
       _channel.invokeMethod<void>('configure', <String, Object>{
         'sampleRate': outputSampleRateHz,
         'channels': channelCount,
+        'clientGeneration': clientGeneration,
       });
 
   @override

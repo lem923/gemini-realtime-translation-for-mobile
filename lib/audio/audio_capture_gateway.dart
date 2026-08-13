@@ -78,16 +78,22 @@ const RecordConfig liveTranslationRecordConfig = RecordConfig(
 class RecordAudioCaptureGateway implements AudioCaptureGateway {
   RecordAudioCaptureGateway({
     AudioRecorderBackend? recorder,
+    AudioRecorderBackend Function()? recorderFactory,
     this.startupTimeout = const Duration(seconds: 3),
-  }) : _recorder = recorder ?? PackageAudioRecorderBackend();
+  }) : _recorder = recorder ?? PackageAudioRecorderBackend(),
+       _recorderFactory =
+           recorderFactory ??
+           (recorder == null ? () => PackageAudioRecorderBackend() : null);
 
-  final AudioRecorderBackend _recorder;
+  AudioRecorderBackend _recorder;
+  final AudioRecorderBackend Function()? _recorderFactory;
   final Duration startupTimeout;
   StreamSubscription<RecordState>? _stateSubscription;
   StreamSubscription<Uint8List>? _rawSubscription;
   StreamController<Uint8List>? _output;
   Completer<void>? _startupCompleter;
   int _captureGeneration = 0;
+  bool _recorderDisposed = false;
   PcmChunker _chunker = PcmChunker(chunkSizeBytes: inputChunkBytes);
 
   @override
@@ -237,8 +243,10 @@ class RecordAudioCaptureGateway implements AudioCaptureGateway {
       try {
         await _recorder.stop();
       } catch (_) {
-        // Local stream ownership is still released below. dispose() also
-        // invokes the backend's terminal release when the gateway is retired.
+        // A failed stop cannot be trusted to have released the microphone.
+        // Retire that backend immediately and create a fresh production backend
+        // so retry remains possible without keeping the suspect recorder alive.
+        await _retireRecorderAfterStopFailure();
       }
     }
     final StreamController<Uint8List>? output = _output;
@@ -266,7 +274,26 @@ class RecordAudioCaptureGateway implements AudioCaptureGateway {
     try {
       await stop();
     } finally {
+      if (!_recorderDisposed) {
+        _recorderDisposed = true;
+        await _recorder.dispose();
+      }
+    }
+  }
+
+  Future<void> _retireRecorderAfterStopFailure() async {
+    try {
       await _recorder.dispose();
+    } catch (_) {
+      // The original stop and terminal dispose both failed; continue releasing
+      // Dart ownership and never reuse this backend.
+    } finally {
+      _recorderDisposed = true;
+    }
+    final AudioRecorderBackend Function()? factory = _recorderFactory;
+    if (factory != null) {
+      _recorder = factory();
+      _recorderDisposed = false;
     }
   }
 }

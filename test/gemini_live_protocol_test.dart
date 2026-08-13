@@ -117,6 +117,107 @@ void main() {
     expect(events.whereType<LiveTurnComplete>(), hasLength(1));
   });
 
+  test('accepts only explicit 24 kHz PCM model audio', () {
+    final List<LiveEvent> events = GeminiLiveProtocol.parseServerMessage(
+      jsonEncode(<String, Object?>{
+        'serverContent': <String, Object?>{
+          'modelTurn': <String, Object?>{
+            'parts': <Object?>[
+              <String, Object?>{'text': 'not audio'},
+              <String, Object?>{
+                'inlineData': <String, Object?>{
+                  'data': base64Encode(<int>[1]),
+                },
+              },
+              <String, Object?>{
+                'inlineData': <String, Object?>{
+                  'data': base64Encode(<int>[2]),
+                  'mimeType': 'image/png',
+                },
+              },
+              <String, Object?>{
+                'inlineData': <String, Object?>{
+                  'data': base64Encode(<int>[3]),
+                  'mimeType': 'audio/pcm;rate=16000',
+                },
+              },
+              <String, Object?>{
+                'inlineData': <String, Object?>{
+                  'data': base64Encode(<int>[4, 5]),
+                  'mimeType': ' AUDIO/PCM ; channels=1; RATE = 24000 ',
+                },
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    expect(events.whereType<LiveAudioChunk>(), hasLength(1));
+    expect(events.whereType<LiveAudioChunk>().single.bytes, <int>[4, 5]);
+  });
+
+  test('ignores malformed, empty, and ambiguous PCM parts independently', () {
+    final List<LiveEvent> events = GeminiLiveProtocol.parseServerMessage(
+      jsonEncode(<String, Object?>{
+        'serverContent': <String, Object?>{
+          'inputTranscription': <String, Object?>{'text': 'still useful'},
+          'modelTurn': <String, Object?>{
+            'parts': <Object?>[
+              <String, Object?>{
+                'inlineData': <String, Object?>{
+                  'data': 'not base64%',
+                  'mimeType': 'audio/pcm;rate=24000',
+                },
+              },
+              <String, Object?>{
+                'inlineData': <String, Object?>{
+                  'data': '',
+                  'mimeType': 'audio/pcm;rate=24000',
+                },
+              },
+              <String, Object?>{
+                'inlineData': <String, Object?>{
+                  'data': base64Encode(<int>[7]),
+                  'mimeType': 'audio/pcm;rate=24000;rate=16000',
+                },
+              },
+              <String, Object?>{
+                'inlineData': <String, Object?>{
+                  'data': base64Encode(<int>[8]),
+                  'mimeType': 'audio/pcm;rate=24000;channels=2',
+                },
+              },
+              <String, Object?>{
+                'inlineData': <String, Object?>{
+                  'data': base64Encode(<int>[9]),
+                  'mimeType': 'audio/pcm;rate=24000;channels=1;channels=1',
+                },
+              },
+              <String, Object?>{
+                'inlineData': <String, Object?>{
+                  'data': base64Encode(<int>[10]),
+                  'mimeType': 'audio/pcm;rate=24000;encoding=s16le',
+                },
+              },
+              <String, Object?>{
+                'inlineData': <String, Object?>{
+                  'data': base64Encode(<int>[11]),
+                  'mimeType': 'audio/pcm;rate=24000;channels',
+                },
+              },
+            ],
+          },
+          'turnComplete': true,
+        },
+      }),
+    );
+
+    expect(events.whereType<LiveAudioChunk>(), isEmpty);
+    expect(events.whereType<LiveInputTranscript>().single.text, 'still useful');
+    expect(events.whereType<LiveTurnComplete>(), hasLength(1));
+  });
+
   test('parses redacted token usage with defensive numeric handling', () {
     final LiveUsageMetadata usage = GeminiLiveProtocol.parseServerMessage(
       jsonEncode(<String, Object?>{

@@ -196,15 +196,53 @@ void main() {
     await gateway.dispose();
     expect(recorder.disposeCount, 1);
   });
+
+  test(
+    'native stop failure retires the recorder and preserves retry',
+    () async {
+      final _FakeRecorderBackend failedRecorder = _FakeRecorderBackend(
+        stopError: StateError('native stop failed'),
+      );
+      late _FakeRecorderBackend replacementRecorder;
+      final RecordAudioCaptureGateway gateway = RecordAudioCaptureGateway(
+        recorder: failedRecorder,
+        recorderFactory: () {
+          replacementRecorder = _FakeRecorderBackend();
+          return replacementRecorder;
+        },
+        startupTimeout: const Duration(seconds: 1),
+      );
+
+      final Future<Stream<Uint8List>> firstStart = gateway.start();
+      await Future<void>.delayed(Duration.zero);
+      failedRecorder.audio.add(Uint8List(inputChunkBytes));
+      await firstStart;
+      await gateway.stop();
+
+      expect(failedRecorder.stopCount, 1);
+      expect(failedRecorder.disposeCount, 1);
+      expect(failedRecorder.recording, isFalse);
+
+      final Future<Stream<Uint8List>> retry = gateway.start();
+      await Future<void>.delayed(Duration.zero);
+      replacementRecorder.audio.add(Uint8List(inputChunkBytes));
+      final Stream<Uint8List> retryStream = await retry;
+      expect(await retryStream.first, hasLength(inputChunkBytes));
+      await gateway.dispose();
+      expect(replacementRecorder.stopCount, 1);
+      expect(replacementRecorder.disposeCount, 1);
+    },
+  );
 }
 
 class _FakeRecorderBackend implements AudioRecorderBackend {
-  _FakeRecorderBackend({this.failStateCancellation = false}) {
+  _FakeRecorderBackend({this.failStateCancellation = false, this.stopError}) {
     audio = StreamController<Uint8List>.broadcast();
     states = StreamController<RecordState>.broadcast();
   }
 
   final bool failStateCancellation;
+  final Object? stopError;
   late final StreamController<Uint8List> audio;
   late final StreamController<RecordState> states;
 
@@ -217,6 +255,7 @@ class _FakeRecorderBackend implements AudioRecorderBackend {
   @override
   Future<void> dispose() async {
     disposeCount += 1;
+    recording = false;
     await audio.close();
     await states.close();
   }
@@ -246,8 +285,12 @@ class _FakeRecorderBackend implements AudioRecorderBackend {
 
   @override
   Future<void> stop() async {
-    recording = false;
     stopCount += 1;
+    final Object? error = stopError;
+    if (error != null) {
+      throw error;
+    }
+    recording = false;
   }
 }
 

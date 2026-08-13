@@ -31,7 +31,7 @@ void main() {
     expect(metrics.audioFocusGranted, isFalse);
   });
 
-  test('decodes interruption and route-change playback events', () {
+  test('decodes interruption, route, and typed failure playback events', () {
     expect(parsePcmPlaybackEvent('interrupted'), isA<PcmPlaybackInterrupted>());
 
     final PcmPlaybackEvent? routeEvent = parsePcmPlaybackEvent(
@@ -41,6 +41,26 @@ void main() {
     expect(
       (routeEvent! as PcmPlaybackRouteChanged).route,
       AudioOutputRoute.bluetooth,
+    );
+    final PcmPlaybackEvent? failureEvent =
+        parsePcmPlaybackEvent(<Object?, Object?>{
+          'type': 'playbackFailed',
+          'reason': 'writeError',
+          'platformCode': -6,
+          'clientGeneration': 7,
+        });
+    expect(failureEvent, isA<PcmPlaybackFailed>());
+    final PcmPlaybackFailed failure = failureEvent! as PcmPlaybackFailed;
+    expect(failure.reason, 'writeError');
+    expect(failure.platformCode, -6);
+    expect(failure.clientGeneration, 7);
+    expect(
+      parsePcmPlaybackEvent(<Object?, Object?>{
+        'type': 'playbackFailed',
+        'reason': 'writeException',
+        'platformCode': 'invalid',
+      }),
+      isA<PcmPlaybackFailed>(),
     );
     expect(parsePcmPlaybackEvent('unexpected'), isNull);
   });
