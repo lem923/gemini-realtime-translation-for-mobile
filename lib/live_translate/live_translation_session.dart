@@ -32,9 +32,21 @@ class GeminiLiveSession implements LiveTranslationSession {
     Uri? endpoint,
     HttpClient Function()? httpClientFactory,
     WebSocketChannel Function(Uri uri, HttpClient client)? channelFactory,
-  }) : endpoint = endpoint ?? Uri.parse(GeminiLiveProtocol.endpoint),
+  }) : endpoint =
+           endpoint ??
+           (_debugEndpointOverride ?? Uri.parse(GeminiLiveProtocol.endpoint)),
        _httpClientFactory = httpClientFactory ?? HttpClient.new,
        _channelFactory = channelFactory ?? _connectChannel;
+
+  static final Uri? _debugEndpointOverride = _readDebugEndpointOverride();
+
+  static Uri? _readDebugEndpointOverride() {
+    const String override = String.fromEnvironment('LIVE_ENDPOINT');
+    if (override.isEmpty) {
+      return null;
+    }
+    return Uri.tryParse(override);
+  }
 
   final String apiKey;
   final String targetLanguageCode;

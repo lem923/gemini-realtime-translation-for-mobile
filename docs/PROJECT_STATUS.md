@@ -4,7 +4,7 @@
 
 `gemini-realtime-translation-for-mobile` 是一个 Android 优先、面向出国旅行双人对话的实时翻译器。应用使用 Flutter 复用产品、协议和状态管理代码，通过 Google Gemini Live API 的 `gemini-3.5-live-translate-preview` 模型同时输出原文、译文和翻译语音。
 
-当前 `0.19.0` 处于 Android 预发布与工程验证阶段，不应视为已经完成生产验收的应用。Android 是第一个交付平台；iOS 将在 Android 真机验证和体验目标稳定后补齐原生适配。
+当前 `0.20.0` 处于开发中：`0.19.0` 已发布为 Android 预发布候选，正在处理真机反馈并继续声学与路由硬化。Android 是第一个交付平台；iOS 将在 Android 真机验证和体验目标稳定后补齐原生适配。
 
 ## 已完成
 
@@ -20,6 +20,8 @@
 
 - 客户端直接连接 `gemini-3.5-live-translate-preview`，输入为 16 kHz、单声道、16 位 PCM，输出为 24 kHz、单声道、16 位 PCM。
 - 解析源语言转写、目标语言转写、音频、会话恢复、服务器迁移提示、上下文压缩和用量元数据。
+- 会话默认请求 500 ms 的服务端静音判定窗口（`automaticActivityDetection.silenceDurationMs`），缩短发言结束后的回合定稿时延。
+- 只有用户手动停止、切换讲话人或撤销权限才会结束流式传输；系统音频焦点中断只退役播放，翻译文本继续输出并可用音量开关恢复语音；麦克风采集意外结束/失败会按有界次数自动重启采集并发送音频流结束边界。
 - WebSocket、录音、播放、权限和安全存储均通过明确接口与共享状态机衔接；Dart 业务代码不依赖 Android 实现类。
 - 队列、回放缓存、历史记录、重连次数和上下文均有边界，避免长时间运行时无限增长。
 
@@ -44,6 +46,7 @@
 
 - GitHub Actions 对每次提交执行 Dart 格式检查、`flutter analyze`、Flutter 测试与覆盖率、Android Kotlin 单元测试、Android lint 和 debug APK 构建。
 - `0.19.0` 候选在本地完整门禁中通过 108 项 Flutter 测试、17 项 Android 宿主层测试、`flutter analyze`、Android lint 和格式检查；Flutter 行覆盖率为 89.1%（1,879/2,109），带品牌资源的签名 release APK 构建成功。
+- `0.20.0` 开发基线通过 109 项 Flutter 测试、Android 宿主层测试、`flutter analyze`、Android lint 和格式检查；本机模拟 Gemini 服务器验证了 API 36 模拟器上的长会话保持、手动方向切换回合边界、goAway 会话迁移和服务器 1001 关闭后的带恢复重连；真实 Gemini 验证了新的会话设置字段、60 秒稳定会话、用量元数据和 2.66 MB 译音，无会话错误与重连。
 - 签名 APK 已通过 v2 签名证书、ZIP/16 KB ELF 页面兼容性、版本（`0.19.0` / code 19）、最低 API 26、目标 API 36、三种 ABI 和非调试构建检查；发布包与源码均未包含本机 API Key 或签名材料。
 - 模拟/确定性测试覆盖协议消息、鉴权与存储失败、会话建立/取消/重连、方向竞争、录音首帧健康检查、PCM 队列、回放边界、权限恢复、生命周期清理、长文本和响应式 UI。
 - 最终候选使用真实 Gemini API 完成中译英、英译中两轮对话和一次手动换人；两轮均取得原文、译文与翻译音频，共返回 204,000 字节译音，失败与重连均为零。测试只记录计数和时延，不记录内容或 Key。
@@ -72,4 +75,4 @@
 
 ## 下一步
 
-`0.19.0` 作为 Android 预发布候选提供给测试者；当前唯一产品主线仍是完成 Android 真机矩阵和量化验收，处理发现的问题，再决定何时发布稳定 Android 版本。随后才进入 iOS 原生适配与同等场景验证。具体执行顺序见 [Roadmap](roadmap.md)，本地运行与构建方式见 [Quickstart](../QUICKSTART.md)。
+`0.19.0` 作为 Android 预发布候选提供给测试者；当前唯一产品主线仍是完成 Android 真机矩阵和量化验收，处理发现的问题（包括真机上的会话保持与翻译时延反馈），再决定何时发布稳定 Android 版本。随后才进入 iOS 原生适配与同等场景验证。具体执行顺序见 [Roadmap](roadmap.md)，本地运行与构建方式见 [Quickstart](../QUICKSTART.md)。

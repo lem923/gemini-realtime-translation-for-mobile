@@ -30,6 +30,13 @@ class GeminiLiveProtocol {
       // setup level. The SDK config flattens these fields the same way.
       'inputAudioTranscription': <String, Object?>{},
       'outputAudioTranscription': <String, Object?>{},
+      // Shorter than the server default: end-of-speech is committed after
+      // half a second of silence, which reduces turn-finalization latency.
+      'realtimeInputConfig': <String, Object?>{
+        'automaticActivityDetection': <String, Object?>{
+          'silenceDurationMs': 500,
+        },
+      },
       'contextWindowCompression': <String, Object?>{
         'slidingWindow': <String, Object?>{},
       },

@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Streaming now keeps its Gemini sessions and microphone across audio-focus
+  interruptions. An interruption retires only the interrupted playback run:
+  translated text keeps flowing and the volume toggle restores voice, matching
+  the design that only explicit stop, direction change, or permission
+  revocation ends a stream.
+- Unexpected microphone capture end or failure now restarts capture with a
+  bounded recovery budget instead of immediately terminating the conversation.
+  Each gap sends `audioStreamEnd` so the server commits the interrupted turn.
+- The Live setup now requests a 500 ms server-side silence window
+  (`automaticActivityDetection.silenceDurationMs`) so turns finalize sooner
+  after speech stops.
+
+### Fixed
+
+- Capture recovery replaces the active subscription before cancelling the
+  previous one, so an already-closed replacement stream can no longer strand
+  the conversation in a false listening state.
+
+### Tests
+
+- 109 Flutter tests pass; Android host tests and lint pass. A mock-server
+  emulator matrix verified session persistence, direction-switch turn
+  boundaries, goAway resumption, and 1001-close reconnects; a real Gemini run
+  validated the new setup fields, a stable 60-second session, usage metadata,
+  and translated audio.
+
 ## [0.19.0] - 2026-08-13
 
 ### Added
