@@ -13,6 +13,27 @@ abstract interface class AudioCaptureGateway {
   Future<void> dispose();
 }
 
+/// Capture settings shared by the Android-first implementation and the future
+/// iOS adapter. Android routing remains owned by the native playback adapter so
+/// capture and translated playback cannot issue competing Bluetooth requests.
+const RecordConfig liveTranslationRecordConfig = RecordConfig(
+  encoder: AudioEncoder.pcm16bits,
+  sampleRate: inputSampleRateHz,
+  numChannels: channelCount,
+  autoGain: true,
+  echoCancel: true,
+  noiseSuppress: true,
+  streamBufferSize: inputChunkBytes,
+  androidConfig: AndroidRecordConfig(
+    manageBluetooth: false,
+    audioSource: AndroidAudioSource.voiceCommunication,
+  ),
+  // The native playback adapter owns the single app-level audio-focus request
+  // and forwards interruptions to the conversation controller. A second
+  // request from `record` would evict our own focus owner.
+  audioInterruption: AudioInterruptionMode.none,
+);
+
 class RecordAudioCaptureGateway implements AudioCaptureGateway {
   RecordAudioCaptureGateway({AudioRecorder? recorder})
     : _recorder = recorder ?? AudioRecorder();
@@ -32,19 +53,7 @@ class RecordAudioCaptureGateway implements AudioCaptureGateway {
     final StreamController<Uint8List> output = StreamController<Uint8List>();
     _output = output;
     final Stream<Uint8List> raw = await _recorder.startStream(
-      const RecordConfig(
-        encoder: AudioEncoder.pcm16bits,
-        sampleRate: inputSampleRateHz,
-        numChannels: channelCount,
-        autoGain: true,
-        echoCancel: true,
-        noiseSuppress: true,
-        streamBufferSize: inputChunkBytes,
-        // The native playback adapter owns the single app-level audio-focus
-        // request and forwards interruptions to the conversation controller.
-        // A second request from `record` would evict our own focus owner.
-        audioInterruption: AudioInterruptionMode.none,
-      ),
+      liveTranslationRecordConfig,
     );
     _rawSubscription = raw.listen(
       (Uint8List bytes) {
