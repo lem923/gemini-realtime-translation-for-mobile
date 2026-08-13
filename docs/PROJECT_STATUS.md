@@ -4,7 +4,7 @@
 
 `gemini-realtime-translation-for-mobile` 是一个 Android 优先、面向出国旅行双人对话的实时翻译器。应用使用 Flutter 复用产品、协议和状态管理代码，通过 Google Gemini Live API 的 `gemini-3.5-live-translate-preview` 模型同时输出原文、译文和翻译语音。
 
-`0.20.0` 已作为 Android 预发布发布（GitHub Releases，签名 APK）。Android 是第一个交付平台；iOS 将在 Android 真机验证和体验目标稳定后补齐原生适配。
+`0.21.0` 已作为 Android 预发布发布（GitHub Releases，签名 APK）。Android 是第一个交付平台；iOS 将在 Android 真机验证和体验目标稳定后补齐原生适配。
 
 ## 已完成
 
@@ -20,7 +20,7 @@
 
 - 客户端直接连接 `gemini-3.5-live-translate-preview`，输入为 16 kHz、单声道、16 位 PCM，输出为 24 kHz、单声道、16 位 PCM。
 - 解析源语言转写、目标语言转写、音频、会话恢复、服务器迁移提示、上下文压缩和用量元数据。
-- 会话默认请求 500 ms 的服务端静音判定窗口（`automaticActivityDetection.silenceDurationMs`），缩短发言结束后的回合定稿时延。
+- 会话默认请求 500 ms 的服务端静音判定窗口（`automaticActivityDetection.silenceDurationMs`），缩短发言结束后的回合定稿时延。麦克风路径使用带自适应噪声底的能量语音门控：只有真实语音才会发给 Gemini，环境噪声与静音在本机停发，每次发言结束发送 `audioStreamEnd` 立即定稿，避免服务器持续翻译背景噪声导致后续语句被饿死。
 - 只有用户手动停止、切换讲话人或撤销权限才会结束流式传输；系统音频焦点中断只退役播放，翻译文本继续输出并可用音量开关恢复语音；麦克风采集意外结束/失败会按有界次数自动重启采集并发送音频流结束边界。
 - WebSocket、录音、播放、权限和安全存储均通过明确接口与共享状态机衔接；Dart 业务代码不依赖 Android 实现类。
 - 队列、回放缓存、历史记录、重连次数和上下文均有边界，避免长时间运行时无限增长。
@@ -75,4 +75,4 @@
 
 ## 下一步
 
-`0.20.0` 已发布为 Android 预发布，修复了真机反馈的会话断开、翻译时延和讲话人卡片误触问题；当前唯一产品主线仍是完成 Android 真机矩阵和量化验收，再决定何时发布稳定 Android 版本。随后才进入 iOS 原生适配与同等场景验证。具体执行顺序见 [Roadmap](roadmap.md)，本地运行与构建方式见 [Quickstart](../QUICKSTART.md)。
+`0.21.0` 已发布为 Android 预发布，修复了真机反馈的连续语句丢失（背景噪声被持续翻译导致回声保护长期占用麦克风）；当前唯一产品主线仍是完成 Android 真机矩阵和量化验收，再决定何时发布稳定 Android 版本。随后才进入 iOS 原生适配与同等场景验证。具体执行顺序见 [Roadmap](roadmap.md)，本地运行与构建方式见 [Quickstart](../QUICKSTART.md)。
