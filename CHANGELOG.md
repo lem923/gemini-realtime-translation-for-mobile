@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-08-13
+
+### Fixed
+
+- Closing a Gemini session while its setup handshake is still pending now
+  cancels that connection immediately instead of leaving its setup future
+  waiting for the transport timeout or emitting a late event to a closed stream.
+- Conversation stop and disposal now release recorder subscriptions, both warm
+  Gemini sessions, playback, and platform audio independently. A failure in one
+  adapter or socket close can no longer abort cleanup of the remaining resources.
+
+### Tests
+
+- Added deterministic regressions for setup-time cancellation without unhandled
+  asynchronous errors and for failure-isolated cleanup when one session close
+  throws. Passed all 78 Flutter tests at 86.1% line coverage, six Android host
+  tests, Flutter analysis, Android lint, formatting, and debug compilation.
+- On Android API 36 with a real Gemini session, backgrounding an active 16 kHz
+  capture released every recording client and restored `MODE_NORMAL` while the
+  app process remained alive; returning showed a clean ready state. API 26 kept
+  its actionable fail-closed microphone behavior with no active recorder.
+
 ## [0.17.0] - 2026-08-13
 
 ### Added

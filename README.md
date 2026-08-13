@@ -2,7 +2,7 @@
 
 Android-first, cross-platform, ultra-low-latency, two-way speech translation for face-to-face travel conversations, powered by the Google Gemini Live API and `gemini-3.5-live-translate-preview`.
 
-> Status: Android-first `0.17.0` preview. The app, generation-isolated and health-checked native Android communication capture/playback path, route-aware half-duplex echo protection, external-device-aware routing, real Gemini speech/text/audio pipeline, listener-facing face-to-face translation, interruption-safe speaker switching, translated-audio replay, persisted language-pair preferences, typed offline/quota/permission recovery states, explicit audio-stream boundaries, long-session context compression, system-audio interruption handling, and privacy-safe runtime diagnostics are runnable; physical-device acoustic and latency hardening remains before a production release.
+> Status: Android-first `0.18.0` preview. The app, generation-isolated and health-checked native Android communication capture/playback path, route-aware half-duplex echo protection, external-device-aware routing, real Gemini speech/text/audio pipeline, listener-facing face-to-face translation, interruption-safe speaker switching, translated-audio replay, persisted language-pair preferences, typed offline/quota/permission recovery states, explicit audio-stream boundaries, long-session context compression, failure-isolated lifecycle cleanup, system-audio interruption handling, and privacy-safe runtime diagnostics are runnable; physical-device acoustic and latency hardening remains before a production release.
 
 ## Product direction
 
@@ -70,7 +70,7 @@ Flutter is the accepted application framework. Android is the first implementati
 
 See the [Google Live Translation guide](https://ai.google.dev/gemini-api/docs/live-api/live-translate) for the current API contract.
 
-## Implemented through 0.17.0
+## Implemented through 0.18.0
 
 - Direct BYOK WebSocket connection to `gemini-3.5-live-translate-preview` with no application backend.
 - Source transcript, translated transcript, and translated 24 kHz PCM audio output.
@@ -114,6 +114,10 @@ See the [Google Live Translation guide](https://ai.google.dev/gemini-api/docs/li
   and at least 48 px language/settings targets improve screen-reader and touch use.
 - Lifecycle cancellation, stale-direction protection, bounded transcripts, and
   the latest 200 conversation turns retained in memory.
+- Closing during the Gemini setup handshake actively cancels the pending
+  connection. Recorder, session, subscription, and playback cleanup is
+  failure-isolated so one broken transport or adapter cannot prevent the other
+  resources from being released.
 - Redacted in-app diagnostics for first-output latency, capture/echo suppression,
   reconnect/failure counts, direction switches, completed turns, and native
   playback queue depth/drops. Gemini prompt, response, and total Token counters
@@ -152,7 +156,7 @@ Enter your own Google AI Studio key in the app. The key's project must be able t
 ## Validation status
 
 - `flutter analyze`: clean.
-- 76 automated protocol, preference, permission, session, PCM, transcript, capture-contract, controller, diagnostics, and
+- 78 automated protocol, preference, permission, session, PCM, transcript, capture-contract, controller, diagnostics, and
   responsive widget tests: passing.
 - 6 Android host-layer route-policy tests and Android lint: passing. CI runs
   both the shared Flutter suite and the app-scoped Kotlin/lint gate.
@@ -210,6 +214,10 @@ Enter your own Google AI Studio key in the app. The key's project must be able t
   24 kHz output played. Muting translated speech resumed forwarding, and stop
   released all resources. Physical-room echo effectiveness remains a hardware
   gate.
+- Android API 36 lifecycle cleanup: backgrounding an active real Gemini session
+  kept the process alive while removing every active recording client and
+  restoring `MODE_NORMAL`; returning to the app showed a clean ready state with
+  no unhandled Flutter or Android exception.
 - Android API 26 failure-path emulator: its legacy microphone HAL rejected both
   default and voice-communication `AudioRecord` initialization. The app detected
   the otherwise-lost plugin error, never entered a false listening state,
