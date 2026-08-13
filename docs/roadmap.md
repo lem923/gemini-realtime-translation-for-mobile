@@ -1,58 +1,93 @@
 # Roadmap
 
-## Phase 0 — Foundation
+> 最后更新：2026-08-13。当前阶段：Android 发布前真机硬化。
 
-- Define the travel conversation product and latency budget.
-- Survey existing open-source projects and decide whether to fork.
-- Establish the client-only BYOK architecture and local key-handling rules.
-- Define device validation and preview-model risks.
+本路线图按可验证的退出门槛推进。功能进入代码、通过模拟器或完成一次 API 冒烟测试，都不自动等于该阶段已经完成。现状总览见 [Project Status](PROJECT_STATUS.md)。
 
-Exit gate: project documentation is internally consistent and the first spike has explicit measurements.
+## 已完成：产品与共享基础
 
-## Phase 1 — Android audio and API spike
+- 确定面向旅行双人对话、用户主动选择 A/B 讲话人的产品范围。
+- 调研同类开源项目并决定建立独立 Flutter 仓库，选择性参考协议和音频实现，而不是 fork 不匹配的桌面/广播项目。
+- 建立客户端直连 Gemini 的 BYOK 架构：无项目后端、无账号、无媒体中继。
+- 将 Gemini 协议、会话状态、语言/方向、转写、回放、权限与诊断放在可跨平台复用的 Dart 层。
+- 完成 Android 16 kHz 录音、24 kHz 播放、通信路由/焦点，以及 API Key、权限与本地偏好的平台接入。
 
-- Capture microphone audio and emit stable 16 kHz mono PCM chunks.
-- Add an API-key settings/validation flow; a missing or invalid key blocks translation.
-- Connect directly to Gemini Live Translate from the phone using the user-entered key.
-- Play 24 kHz translated PCM without gaps or unbounded buffering.
-- Assemble source and translated transcript deltas.
-- Measure time to first transcript, time to first audio, jitter, reconnect time, and memory growth.
+已达到的工程门槛：核心双向流程可运行；格式、静态分析、Flutter 测试、Android 单测/lint 和 debug APK 构建已纳入 CI。
 
-Exit gate: reliable one-direction translation on the defined physical Android device matrix with recorded latency and queue results; the shared core has no Android-only dependencies.
+## 已完成：Android 双向 MVP
 
-## Phase 2 — Two-way travel conversation MVP
+- 标准与面对面两种 Material 3 布局。
+- 搜索/交换语言，手动 A/B 讲话人切换，同时输出源文本、译文与翻译语音。
+- 两个方向会话、明确音频流边界、迟到事件隔离和切换期间的播放中断。
+- 有界历史与内存内译音回放、静音和清空。
+- 鉴权、权限、离线、重连、配额、服务错误和生命周期的可恢复 UI。
+- 长会话上下文压缩、会话恢复、播放队列上限和不含内容的运行诊断。
+- Material 3 明暗主题、触控目标、语义标签、文本对比度、RTL、放大字体和短屏长文本的自动化覆盖。
 
-- Add language A/B selection and two large speaker selectors.
-- Add face-to-face and single-reader layouts.
-- Let the user explicitly select person A or person B as the active speaker.
-- Maintain two ready translation directions where measurements justify it, activating only the selected direction.
-- Add tap-to-talk or start/stop capture; automatic speaker detection remains out of scope.
-- Maintain transcript history plus bounded memory-only replay, mute, and clear controls.
-- Handle interruption, direction change, permission denial, offline state, quota errors, and model disconnects.
+已达到的功能门槛：在自动化、真实 Gemini 主机测试和 Android API 36 模拟器中，代表性旅行对话能够交替完成。尚未达到 Android 生产发布门槛。
 
-Exit gate: two people can complete representative hotel, restaurant, taxi, shopping, and emergency dialogues on one phone.
+## 当前：Android 真机与声学硬化
 
-## Phase 3 — Android hardening and release (current)
+### 1. 建立可复现的设备矩阵
 
-- Run noisy-street, speakerphone, headset, and weak-network tests.
-- Add privacy notice, explicit retention behavior, and redacted telemetry.
-- Add CI, Flutter integration tests, accessibility checks, signing guidance, and Android release packaging.
+- 至少覆盖一台 Android 8–10、一台 Android 11–13 和一台 Android 14 及以上的物理手机。
+- 记录设备型号、系统版本、音频路由、应用版本和测试条件；问题必须能关联到具体矩阵项。
+- 每台设备执行冷启动、首次权限、拒绝后恢复、前后台、来电/媒体抢占、停止后重启和连续 A/B 切换。
 
-Exit gate: defined latency/reliability targets pass on the supported Android device matrix.
+退出门槛：所有支持的系统代际至少有一台可正常录音的真机通过基础场景；API 26 模拟器的音频 HAL 失败不能充当真机通过证据。
 
-## Phase 4 — iOS adapter and parity
+### 2. 完成路由与声学验收
 
-- Implement the existing audio interface with `AVAudioSession`, `AVAudioEngine`, and `AVAudioConverter`.
-- Implement Keychain-backed optional key persistence and iOS permission/lifecycle handling.
-- Validate route changes, interruptions, speaker/receiver/Bluetooth behavior, echo control, and background transitions.
-- Run the shared conversation, protocol, transcript, reconnect, and queue test suites unchanged.
-- Package and release the iOS application after Android behavior reaches parity.
+- 分别测试内置扬声器、听筒、3.5 mm/USB 有线设备，以及可获得的蓝牙耳机/助听设备。
+- 在安静房间、正常旅行环境和高噪声条件下检查回声回灌、截断、啸叫、音量和人工切换体验。
+- 根据真机结果调整半双工保护时间、播放队列和路由退化策略；未知路由保持保守行为。
 
-Exit gate: core travel scenarios and latency/reliability targets pass on the supported physical iPhone matrix without forking shared product logic.
+退出门槛：定义的设备/路由组合无资源泄漏和严重回声循环；无法支持的组合在 UI 或文档中有明确限制。
 
-## Deferred
+### 3. 量化时延、网络与长时稳定性
 
-- Multi-party rooms or broadcast translation.
-- Video/vision input and general Gemini agent features.
-- Backend services, user accounts, cloud transcript storage, analytics, or payments.
-- Offline translation or a second provider.
+- 在真机记录采集到首个源文本、首个译文、首段可听音频、方向切换和重连的分位数。
+- 测试 Wi-Fi、蜂窝网络、短暂断网、高延迟/丢包、配额不足、并发受限和服务端连接迁移。
+- 进行至少 20 分钟生产节奏会话，记录内存、队列、掉帧、温升、耗电和停止后的资源状态。
+- 明确预热双会话在低并发配额下的退化方案，并保证用户能理解和恢复。
+
+退出门槛：公开记录目标值与实测结果；支持矩阵内无无界增长、卡死、静默假监听或无法停止的会话。
+
+### 4. Android 候选发布
+
+- 冻结受支持系统/路由范围、隐私说明、预览模型风险和已知问题。
+- 在干净环境复跑完整 CI、release APK 构建、签名校验、16 KB 页面校验和升级安装。
+- 由未参与实现的人按 Quickstart 完成一次安装、BYOK、权限和双向旅行对话验收。
+- 发布候选版本；观察阻断问题后再决定是否标记为稳定 Android 版本。
+
+退出门槛：真机矩阵、声学、弱网、长时、可访问性、隐私和发布包检查均有可追溯通过证据；剩余限制已公开且不阻断核心旅行对话。
+
+## 后续：iOS 适配与同等能力
+
+iOS 工作在 Android 行为与测试契约稳定后开始。现有 iOS 工程和 Flutter 共享代码不是可用 iOS 产品的证明。
+
+### 1. 原生平台适配
+
+- 用 `AVAudioSession` 管理录音/播放类别、模式、扬声器/听筒、蓝牙、路由变化和系统中断。
+- 用 `AVAudioEngine`/`AVAudioConverter`（或经测量更合适的等价实现）提供共享接口要求的 16 kHz PCM 输入与 24 kHz PCM 输出。
+- 验证可选 Keychain 安全存储、首次权限、拒绝后设置恢复和应用生命周期。
+
+### 2. 共享契约复用
+
+- 不复制 Flutter 产品状态机；同一套协议、方向、转写、错误、回放、隐私和可访问性测试应继续通过。
+- 为 iOS 原生音频、路由、中断和安全存储补充针对性单元/集成测试。
+- 任何平台差异通过明确 capability 或平台接口表达，不在共享业务代码中散布系统判断。
+
+### 3. iPhone 真机与发布
+
+- 在受支持 iOS 版本和代表性 iPhone 上重复 Android 的旅行场景、路由、弱网、长时、时延与声学矩阵。
+- 完成签名、归档、隐私清单、商店材料和外部候选测试。
+
+退出门槛：共享核心无平台分叉，目标 iPhone 矩阵达到与 Android 相同定义的核心场景、资源释放、时延和可靠性门槛，才能宣称 iOS 支持。
+
+## 暂不纳入
+
+- 自动判断或自动切换讲话人、全双工免触控对话。
+- 多人房间、广播翻译、视频/视觉输入或通用 Gemini 助手。
+- 项目后端、用户账号、云端对话存储、默认分析、广告或支付。
+- 离线翻译或第二家模型提供商。

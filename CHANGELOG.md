@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added an original Android/iOS launcher icon and branded launch artwork built
+  around bidirectional speech bubbles, exchange arrows, and a voice waveform.
+- Added a public project-status report and an evidence-gated Android-first/iOS-
+  later roadmap.
+- Added face-to-face status/error overlays, complete long-transcript scrolling,
+  explicit Google processing/privacy disclosure, and Material 3 accessibility
+  checks for light/dark themes, RTL, 200% text scale, contrast, labels, and tap
+  targets.
+
+### Changed
+
+- Speaker changes now retire the previous active directional session before
+  warming a clean replacement, preventing an old response from crossing a later
+  reactivation boundary.
+- Native translated-audio queues and failure events now carry playback
+  generations. Flush, focus loss, stop, and recovery cannot replay an old chunk
+  or let a delayed failure mutate a newer playback run.
+- Authentication failure clears the active key immediately; secure-storage
+  deletion is bounded and reports an actionable warning if a device copy cannot
+  be confirmed removed.
+
+### Fixed
+
+- Made recorder and native playback teardown authoritative before media owners
+  can be reused, while keeping socket/subscription cleanup isolated and bounded.
+- Hardened Gemini session replacement/close against throwing or hanging channel
+  cancellation and made concurrent close calls share one operation.
+- Reject malformed, non-audio, non-mono, or non-24 kHz inline PCM before it can
+  reach the fixed Android output format.
+- Treat capture completion and Gemini interruption as explicit terminal/turn
+  boundaries, and retire a recorder backend whose native stop fails.
+
+### Tests
+
+- Passed all 108 Flutter tests at 89.1% line coverage, 17 Android host tests,
+  Flutter analysis, Android lint, formatting, and a branded debug APK build.
+
 ## [0.18.0] - 2026-08-13
 
 ### Fixed

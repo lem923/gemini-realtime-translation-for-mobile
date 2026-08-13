@@ -2,7 +2,7 @@
 
 Android-first, cross-platform, ultra-low-latency, two-way speech translation for face-to-face travel conversations, powered by the Google Gemini Live API and `gemini-3.5-live-translate-preview`.
 
-> Status: Android-first `0.18.0` preview. The app, generation-isolated and health-checked native Android communication capture/playback path, route-aware half-duplex echo protection, external-device-aware routing, real Gemini speech/text/audio pipeline, listener-facing face-to-face translation, interruption-safe speaker switching, translated-audio replay, persisted language-pair preferences, typed offline/quota/permission recovery states, explicit audio-stream boundaries, long-session context compression, failure-isolated lifecycle cleanup, system-audio interruption handling, and privacy-safe runtime diagnostics are runnable; physical-device acoustic and latency hardening remains before a production release.
+> Status: Android-first `0.19.0` development preview. The core app and real Gemini speech/text/audio pipeline are runnable; representative physical-device acoustic and latency hardening remains before a production release. See the public [project status](docs/PROJECT_STATUS.md) and [roadmap](docs/roadmap.md) for verified evidence and remaining gates.
 
 ## Product direction
 
@@ -70,7 +70,7 @@ Flutter is the accepted application framework. Android is the first implementati
 
 See the [Google Live Translation guide](https://ai.google.dev/gemini-api/docs/live-api/live-translate) for the current API contract.
 
-## Implemented through 0.18.0
+## Implemented on current main
 
 - Direct BYOK WebSocket connection to `gemini-3.5-live-translate-preview` with no application backend.
 - Source transcript, translated transcript, and translated 24 kHz PCM audio output.
@@ -156,10 +156,11 @@ Enter your own Google AI Studio key in the app. The key's project must be able t
 ## Validation status
 
 - `flutter analyze`: clean.
-- 78 automated protocol, preference, permission, session, PCM, transcript, capture-contract, controller, diagnostics, and
+- 108 automated protocol, preference, permission, session, PCM, transcript, capture-contract, controller, diagnostics, and
   responsive widget tests: passing.
-- 6 Android host-layer route-policy tests and Android lint: passing. CI runs
+- 17 Android host-layer route/lifecycle tests and Android lint: passing. CI runs
   both the shared Flutter suite and the app-scoped Kotlin/lint gate.
+- Flutter line coverage: 89.1% (1,879 of 2,109 lines).
 - Real API smoke: both Chinese-to-English and English-to-Chinese 16 kHz speech
   inputs produced source text, translated text, and 24 kHz audio. The server also
   accepted context compression and returned non-zero usage metadata.
@@ -234,7 +235,10 @@ Enter your own Google AI Studio key in the app. The key's project must be able t
 
 ## Project management
 
-Alcove manages private working documentation for PRD, architecture, decisions, progress, debt, conventions, and secret-handling rules. Public findings that are safe and useful to contributors live under `docs/`.
+Alcove manages private working documentation for PRD, architecture, decisions,
+progress, debt, conventions, and secret-handling rules. Contributor-facing
+milestones and evidence are kept in [Project Status](docs/PROJECT_STATUS.md) and
+the [Roadmap](docs/roadmap.md); public research lives under `docs/research/`.
 
 ## License
 
