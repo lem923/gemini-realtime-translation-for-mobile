@@ -7,11 +7,13 @@ import 'conversation_models.dart';
 class ConversationDiagnostics {
   const ConversationDiagnostics({
     required this.phase,
+    required this.mode,
     required this.sessionDurationMilliseconds,
     required this.microphoneChunksSent,
     required this.microphoneChunksSuppressed,
     required this.microphoneChunksHeld,
     required this.utterancesDetected,
+    required this.bargeIns,
     required this.outputAudioChunks,
     required this.outputAudioBytes,
     required this.completedTurns,
@@ -35,11 +37,13 @@ class ConversationDiagnostics {
   });
 
   final ConversationPhase phase;
+  final ConversationMode mode;
   final int sessionDurationMilliseconds;
   final int microphoneChunksSent;
   final int microphoneChunksSuppressed;
   final int microphoneChunksHeld;
   final int utterancesDetected;
+  final int bargeIns;
   final int outputAudioChunks;
   final int outputAudioBytes;
   final int completedTurns;
@@ -66,11 +70,13 @@ class ConversationDiagnostics {
     return <String>[
       '即时翻译运行诊断（不含 Key、音频或对话内容）',
       '状态: ${phase.name}',
+      '模式: ${mode == ConversationMode.simultaneous ? '同声传译' : '逐句翻译'}',
       '会话时长: $sessionDurationMilliseconds ms',
       '麦克风已发送块: $microphoneChunksSent',
       '回声保护丢弃块: $microphoneChunksSuppressed',
       '静音停发块: $microphoneChunksHeld',
       '检测到发言: $utterancesDetected',
+      '抢话中断: $bargeIns',
       '译音块 / 字节: $outputAudioChunks / $outputAudioBytes',
       '完成轮次: $completedTurns',
       '方向切换: $directionSwitches',

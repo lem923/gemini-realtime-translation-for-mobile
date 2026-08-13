@@ -93,6 +93,38 @@ void main() {
     controller.dispose();
   });
 
+  testWidgets('mode selector switches between sentence and simultaneous', (
+    WidgetTester tester,
+  ) async {
+    final ConversationController controller = ConversationController(
+      keyStore: _StoredKeyStore(),
+      audioCapture: _NoopAudioCapture(),
+      playback: _NoopPlayback(),
+      sessionFactory:
+          ({required String apiKey, required String targetLanguageCode}) =>
+              _NoopLiveSession(),
+    );
+    await controller.initialize();
+
+    await tester.pumpWidget(
+      MaterialApp(home: ConversationPage(controller: controller)),
+    );
+    await tester.pumpAndSettle();
+    expect(controller.mode, ConversationMode.sentenceBySentence);
+    expect(find.text('逐句翻译'), findsOneWidget);
+    expect(find.text('同声传译'), findsOneWidget);
+
+    await tester.tap(find.text('同声传译'));
+    await tester.pumpAndSettle();
+    expect(controller.mode, ConversationMode.simultaneous);
+
+    await tester.tap(find.text('逐句翻译'));
+    await tester.pumpAndSettle();
+    expect(controller.mode, ConversationMode.sentenceBySentence);
+
+    controller.dispose();
+  });
+
   testWidgets('shows connecting state in face-to-face mode', (
     WidgetTester tester,
   ) async {

@@ -114,6 +114,9 @@ class ConversationController extends ChangeNotifier {
   int _microphoneChunksSuppressed = 0;
   int _microphoneChunksHeld = 0;
   int _utterancesDetected = 0;
+  int _bargeIns = 0;
+  int _suppressedSpeechStreak = 0;
+  int _lastBargeInMicros = -bargeInCooldownMicros;
   int _outputAudioChunks = 0;
   int _outputAudioBytes = 0;
   int _diagnosticCompletedTurns = 0;
@@ -130,6 +133,7 @@ class ConversationController extends ChangeNotifier {
   String? _errorMessage;
   ConversationPhase _phase = ConversationPhase.needsKey;
   SpeakerSide _activeSpeaker = SpeakerSide.a;
+  ConversationMode _mode = ConversationMode.sentenceBySentence;
   TranslationLanguage _languageA = languageByCode('zh-Hans');
   TranslationLanguage _languageB = languageByCode('en');
   final List<ConversationTurn> _turns = <ConversationTurn>[];
@@ -150,6 +154,8 @@ class ConversationController extends ChangeNotifier {
   static const int maxReplayCacheBytes = 8 * 1024 * 1024;
   static const int maxCaptureRecoveryAttempts = 3;
   static const Duration captureRecoveryDelay = Duration(milliseconds: 300);
+  static const int bargeInSpeechChunks = 3;
+  static const int bargeInCooldownMicros = 1500000;
   static const int _replayChunkBytes =
       outputSampleRateHz * bytesPerSample ~/ 10;
 
@@ -176,6 +182,7 @@ class ConversationController extends ChangeNotifier {
       _stopOperation != null;
   ConversationPhase get phase => _phase;
   SpeakerSide get activeSpeaker => _activeSpeaker;
+  ConversationMode get mode => _mode;
   TranslationLanguage get languageA => _languageA;
   TranslationLanguage get languageB => _languageB;
   TranslationLanguage get activeSourceLanguage =>
@@ -389,6 +396,8 @@ class ConversationController extends ChangeNotifier {
     final int generation = ++_conversationGeneration;
     _captureRecoveryAttempts = 0;
     _speechDetector = SpeechActivityDetector();
+    _suppressedSpeechStreak = 0;
+    _lastBargeInMicros = -bargeInCooldownMicros;
     notifyListeners();
     try {
       final bool permissionGranted = await _audioCapture.hasPermission();
@@ -619,40 +628,68 @@ class ConversationController extends ChangeNotifier {
     if (!isListening) {
       return;
     }
-    if (_playbackFlushesInFlight > 0 ||
-        _monotonicMicros() < _captureBlockedUntilMicros) {
-      _microphoneChunksSuppressed += 1;
-      return;
-    }
     final LiveTranslationSession? session = _sessions[_activeSpeaker];
     if (session?.isReady != true) {
       return;
     }
     final SpeechGateDecision decision = _speechDetector.add(chunk);
+    final int now = _monotonicMicros();
+    final bool echoGuarded =
+        _mode == ConversationMode.sentenceBySentence &&
+        (_playbackFlushesInFlight > 0 || now < _captureBlockedUntilMicros);
+    if (echoGuarded) {
+      if (decision == SpeechGateDecision.forward &&
+          _playbackFlushesInFlight == 0) {
+        _suppressedSpeechStreak += 1;
+        if (_suppressedSpeechStreak >= bargeInSpeechChunks &&
+            now - _lastBargeInMicros >= bargeInCooldownMicros) {
+          _suppressedSpeechStreak = 0;
+          _lastBargeInMicros = now;
+          _bargeIns += 1;
+          // The user is talking over the translation: cut the translated
+          // playback and reopen the microphone for the new utterance. The
+          // current chunk is forwarded so no speech is lost.
+          _sendMicrophoneChunk(session!, chunk);
+          unawaited(_flushPlayback());
+          return;
+        }
+      } else {
+        _suppressedSpeechStreak = 0;
+      }
+      _microphoneChunksSuppressed += 1;
+      return;
+    }
+    _suppressedSpeechStreak = 0;
     switch (decision) {
       case SpeechGateDecision.hold:
         _microphoneChunksHeld += 1;
       case SpeechGateDecision.finalize:
         _microphoneChunksHeld += 1;
         _utterancesDetected += 1;
-        try {
-          session!.endAudioStream();
-        } catch (_) {
-          // A broken transport must not prevent the next utterance; the
-          // session state machine reports and reconnects on its own.
+        if (_mode == ConversationMode.sentenceBySentence) {
+          try {
+            session!.endAudioStream();
+          } catch (_) {
+            // A broken transport must not prevent the next utterance; the
+            // session state machine reports and reconnects on its own.
+          }
         }
       case SpeechGateDecision.forward:
-        final int now = _monotonicMicros();
-        try {
-          session!.sendAudio(chunk);
-          _firstMicrophoneSentMicros ??= now;
-          _firstMicrophoneSentMilliseconds ??= _elapsedDiagnosticMillisecondsAt(
-            now,
-          );
-          _microphoneChunksSent += 1;
-        } catch (_) {
-          _terminateConversation('连接已中断，请检查网络后重试');
-        }
+        _sendMicrophoneChunk(session!, chunk);
+    }
+  }
+
+  void _sendMicrophoneChunk(LiveTranslationSession session, Uint8List chunk) {
+    final int now = _monotonicMicros();
+    try {
+      session.sendAudio(chunk);
+      _firstMicrophoneSentMicros ??= now;
+      _firstMicrophoneSentMilliseconds ??= _elapsedDiagnosticMillisecondsAt(
+        now,
+      );
+      _microphoneChunksSent += 1;
+    } catch (_) {
+      _terminateConversation('连接已中断，请检查网络后重试');
     }
   }
 
@@ -876,9 +913,11 @@ class ConversationController extends ChangeNotifier {
       _maximumScheduledPlaybackMicros,
       _scheduledPlaybackEndMicros - now,
     );
-    _captureBlockedUntilMicros =
-        _scheduledPlaybackEndMicros +
-        echoGuardMicrosForRoute(_activeOutputRoute);
+    if (_mode == ConversationMode.sentenceBySentence) {
+      _captureBlockedUntilMicros =
+          _scheduledPlaybackEndMicros +
+          echoGuardMicrosForRoute(_activeOutputRoute);
+    }
     _appendPlayback(() => _playback.enqueue(bytes));
   }
 
@@ -1102,6 +1141,15 @@ class ConversationController extends ChangeNotifier {
     _diagnosticCompletedTurns += 1;
     source.clear();
     translated.clear();
+    notifyListeners();
+  }
+
+  void setMode(ConversationMode mode) {
+    if (_mode == mode || _disposed) {
+      return;
+    }
+    _mode = mode;
+    _errorMessage = null;
     notifyListeners();
   }
 
@@ -1754,11 +1802,13 @@ class ConversationController extends ChangeNotifier {
               Duration.microsecondsPerMillisecond;
     return ConversationDiagnostics(
       phase: _phase,
+      mode: _mode,
       sessionDurationMilliseconds: durationMilliseconds,
       microphoneChunksSent: _microphoneChunksSent,
       microphoneChunksSuppressed: _microphoneChunksSuppressed,
       microphoneChunksHeld: _microphoneChunksHeld,
       utterancesDetected: _utterancesDetected,
+      bargeIns: _bargeIns,
       outputAudioChunks: _outputAudioChunks,
       outputAudioBytes: _outputAudioBytes,
       completedTurns: _diagnosticCompletedTurns,
@@ -1797,6 +1847,7 @@ class ConversationController extends ChangeNotifier {
     _microphoneChunksSuppressed = 0;
     _microphoneChunksHeld = 0;
     _utterancesDetected = 0;
+    _bargeIns = 0;
     _outputAudioChunks = 0;
     _outputAudioBytes = 0;
     _diagnosticCompletedTurns = 0;

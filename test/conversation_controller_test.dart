@@ -1988,6 +1988,146 @@ void main() {
   );
 
   test(
+    'sustained speech during translated playback barges in and reopens the mic',
+    () async {
+      int nowMicros = 0;
+      final _FakeAudioCapture capture = _FakeAudioCapture();
+      final _FakePlayback playback = _FakePlayback();
+      final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
+      final ConversationController controller = ConversationController(
+        keyStore: _MemoryKeyStore('stored-key'),
+        audioCapture: capture,
+        playback: playback,
+        monotonicMicros: () => nowMicros,
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) {
+              final _FakeLiveSession session = _FakeLiveSession();
+              sessions.add(session);
+              return session;
+            },
+      );
+
+      await controller.initialize();
+      await controller.startConversation();
+      playback.emitRoute(AudioOutputRoute.speaker);
+      sessions.first.emit(LiveAudioChunk(Uint8List(48000)));
+      await _flushEvents();
+
+      nowMicros = 100000;
+      capture.emit(_speechChunk());
+      expect(sessions.first.audio, isEmpty);
+      nowMicros = 200000;
+      capture.emit(_speechChunk());
+      expect(sessions.first.audio, isEmpty);
+
+      nowMicros = 300000;
+      capture.emit(_speechChunk());
+      await _flushEvents();
+      expect(sessions.first.audio, <List<int>>[_speechChunk()]);
+      expect(playback.operations, contains('flush'));
+
+      nowMicros = 350000;
+      capture.emit(_speechChunk());
+      await _flushEvents();
+      expect(sessions.first.audio, hasLength(2));
+
+      final ConversationDiagnostics diagnostics = await controller
+          .collectDiagnostics();
+      expect(diagnostics.bargeIns, 1);
+      expect(diagnostics.microphoneChunksSent, 2);
+      expect(diagnostics.microphoneChunksSuppressed, 2);
+
+      await controller.stopConversation();
+      controller.dispose();
+    },
+  );
+
+  test(
+    'simultaneous mode forwards speech while translated audio plays',
+    () async {
+      int nowMicros = 0;
+      final _FakeAudioCapture capture = _FakeAudioCapture();
+      final _FakePlayback playback = _FakePlayback();
+      final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
+      final ConversationController controller = ConversationController(
+        keyStore: _MemoryKeyStore('stored-key'),
+        audioCapture: capture,
+        playback: playback,
+        monotonicMicros: () => nowMicros,
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) {
+              final _FakeLiveSession session = _FakeLiveSession();
+              sessions.add(session);
+              return session;
+            },
+      );
+
+      await controller.initialize();
+      await controller.startConversation();
+      controller.setMode(ConversationMode.simultaneous);
+      playback.emitRoute(AudioOutputRoute.speaker);
+      sessions.first.emit(LiveAudioChunk(Uint8List(48000)));
+      await _flushEvents();
+
+      nowMicros = 100000;
+      capture.emit(_speechChunk());
+      capture.emit(_speechChunk());
+      await _flushEvents();
+      expect(sessions.first.audio, hasLength(2));
+
+      final ConversationDiagnostics diagnostics = await controller
+          .collectDiagnostics();
+      expect(diagnostics.microphoneChunksSuppressed, 0);
+      expect(diagnostics.microphoneChunksSent, 2);
+      expect(diagnostics.mode, ConversationMode.simultaneous);
+
+      await controller.stopConversation();
+      controller.dispose();
+    },
+  );
+
+  test(
+    'simultaneous mode keeps the stream open without turn finalization',
+    () async {
+      final _FakeAudioCapture capture = _FakeAudioCapture();
+      final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
+      final ConversationController controller = ConversationController(
+        keyStore: _MemoryKeyStore('stored-key'),
+        audioCapture: capture,
+        playback: _FakePlayback(),
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) {
+              final _FakeLiveSession session = _FakeLiveSession();
+              sessions.add(session);
+              return session;
+            },
+      );
+
+      await controller.initialize();
+      await controller.startConversation();
+      controller.setMode(ConversationMode.simultaneous);
+      await _flushEvents();
+
+      capture.emit(_speechChunk());
+      capture.emit(_speechChunk());
+      for (int i = 0; i < 6; i += 1) {
+        capture.emit(_silenceChunk());
+      }
+      await _flushEvents();
+      expect(sessions.first.endAudioStreamCount, 0);
+      expect(sessions.first.audio, hasLength(7));
+
+      final ConversationDiagnostics diagnostics = await controller
+          .collectDiagnostics();
+      expect(diagnostics.utterancesDetected, 1);
+      expect(diagnostics.microphoneChunksHeld, 1);
+
+      await controller.stopConversation();
+      controller.dispose();
+    },
+  );
+
+  test(
     'capture startup failure closes the already connected session',
     () async {
       final _FakeAudioCapture capture = _FakeAudioCapture(
@@ -2224,10 +2364,12 @@ void main() {
     final ConversationDiagnostics diagnostics = await controller
         .collectDiagnostics();
     expect(diagnostics.sessionDurationMilliseconds, 200);
+    expect(diagnostics.mode, ConversationMode.sentenceBySentence);
     expect(diagnostics.microphoneChunksSent, 1);
     expect(diagnostics.microphoneChunksSuppressed, 1);
     expect(diagnostics.microphoneChunksHeld, 0);
     expect(diagnostics.utterancesDetected, 0);
+    expect(diagnostics.bargeIns, 0);
     expect(diagnostics.outputAudioChunks, 1);
     expect(diagnostics.outputAudioBytes, 4800);
     expect(diagnostics.completedTurns, 1);

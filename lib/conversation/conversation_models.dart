@@ -4,6 +4,16 @@ import '../shared/translation_language.dart';
 
 enum SpeakerSide { a, b }
 
+/// Operating mode for the microphone/playback pipeline.
+///
+/// [sentenceBySentence] keeps the classic half-duplex flow: the microphone is
+/// protected from the speaker while a translation plays, and each utterance
+/// ends with an explicit turn boundary. [simultaneous] keeps the microphone
+/// open while translated audio plays so interpretation streams continuously,
+/// like the AI Studio live playground; it relies on device echo cancellation
+/// and works best with earpiece or headset output.
+enum ConversationMode { sentenceBySentence, simultaneous }
+
 enum ConversationPhase {
   needsKey,
   idle,

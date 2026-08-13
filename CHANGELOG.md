@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-08-13
+
+### Added
+
+- Conversation modes: 逐句翻译 (sentence-by-sentence) keeps the echo guard
+  and finalizes each utterance; 同声传译 (simultaneous) keeps the microphone
+  open while translated audio plays, matching the AI Studio live-playground
+  flow, and is recommended for earpiece/headset use. A segmented selector with
+  per-mode guidance sits under the status strip in both layouts.
+
+### Changed
+
+- Sustained speech during translated playback now barges in: the translation
+  playback is cut, the microphone reopens, and the new utterance is forwarded
+  immediately. Diagnostics report 抢话中断 events.
+- Diagnostics include the active conversation mode.
+
+### Tests
+
+- 120 Flutter tests pass, including barge-in, simultaneous-mode routing, and
+  mode-selector regressions; Android host tests and lint pass. On-device runs
+  confirmed the mode selector, simultaneous-mode diagnostics, and a healthy
+  real-Gemini session.
+
 ## [0.21.0] - 2026-08-13
 
 ### Changed

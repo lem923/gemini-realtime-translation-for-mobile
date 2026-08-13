@@ -152,6 +152,8 @@ class _ConversationBody extends StatelessWidget {
           sliver: SliverList.list(
             children: <Widget>[
               _StatusStrip(controller: controller),
+              const SizedBox(height: 12),
+              _ModeSelector(controller: controller),
               if (!controller.hasApiKey) ...<Widget>[
                 const SizedBox(height: 12),
                 const _SetupBanner(),
@@ -188,6 +190,70 @@ class _ConversationBody extends StatelessWidget {
             ],
           ),
         ),
+      ],
+    );
+  }
+}
+
+class _ModeSelector extends StatelessWidget {
+  const _ModeSelector({required this.controller, this.showHint = true});
+
+  final ConversationController controller;
+  final bool showHint;
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme colors = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        Center(
+          child: SegmentedButton<ConversationMode>(
+            segments: const <ButtonSegment<ConversationMode>>[
+              ButtonSegment<ConversationMode>(
+                value: ConversationMode.sentenceBySentence,
+                label: Text('逐句翻译'),
+                tooltip: '说完一句，听完译文，再讲下一句',
+              ),
+              ButtonSegment<ConversationMode>(
+                value: ConversationMode.simultaneous,
+                label: Text('同声传译'),
+                tooltip: '边说边听，译文随讲随播，建议佩戴耳机',
+              ),
+            ],
+            selected: <ConversationMode>{controller.mode},
+            onSelectionChanged: (Set<ConversationMode> selection) {
+              controller.setMode(selection.first);
+            },
+            showSelectedIcon: false,
+            style: ButtonStyle(
+              tapTargetSize: MaterialTapTargetSize.padded,
+              minimumSize: const WidgetStatePropertyAll<Size>(Size(0, 48)),
+              textStyle: WidgetStatePropertyAll<TextStyle>(
+                TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: colors.onSurface,
+                ),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 7),
+        if (showHint)
+          Text(
+            controller.mode == ConversationMode.simultaneous
+                ? '同声传译：麦克风在译文播放时保持开启，适合耳机使用'
+                : '逐句翻译：播放译文时保护麦克风，适合外放面对面使用',
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 11,
+              color: colors.onSurfaceVariant,
+              height: 1.3,
+            ),
+          ),
       ],
     );
   }
@@ -985,6 +1051,8 @@ class _FaceStatusPanel extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
         _StatusStrip(controller: controller),
+        const SizedBox(height: 8),
+        _ModeSelector(controller: controller, showHint: false),
         if (controller.errorMessage != null) ...<Widget>[
           const SizedBox(height: 8),
           _ErrorBanner(
