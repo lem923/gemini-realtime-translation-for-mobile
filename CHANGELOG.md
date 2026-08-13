@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-08-13
+
+### Fixed
+
+- Prevented a failed native recorder initialization from leaving the app in a
+  false listening state. Capture startup now observes the recorder state-error
+  channel and requires the first complete PCM chunk within three seconds.
+- Preserved that first PCM chunk for Gemini instead of consuming it as a health
+  probe. Early error, closed stream, and silent timeout paths release recorder,
+  Gemini sessions, communication mode, focus, and route before retry.
+- Added a specific microphone-startup recovery message instead of mislabeling a
+  native capture failure as an API Key or network problem.
+
+### Tests
+
+- Added deterministic first-chunk, native-start-error, and silent-timeout
+  gateway tests plus controller cleanup/message coverage.
+- Passed all 70 Flutter tests at 86.0% line coverage, six Android host tests,
+  Flutter analysis, Android lint, and debug APK compilation.
+- An Android API 26 emulator with a nonfunctional legacy microphone HAL now
+  fails closed with an actionable message and complete audio-resource release;
+  the same build completes the first-chunk handshake, real Gemini startup, and
+  `VOICE_COMMUNICATION` capture on API 36.
+
 ## [0.14.0] - 2026-08-13
 
 ### Fixed
