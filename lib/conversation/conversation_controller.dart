@@ -294,8 +294,8 @@ class ConversationController extends ChangeNotifier {
       notifyListeners();
       return false;
     } finally {
-      await subscription.cancel();
-      await probe.close();
+      await _cancelSubscriptionBestEffort(subscription);
+      await _runCleanupBestEffort(probe.close);
     }
   }
 

@@ -50,6 +50,41 @@ void main() {
     controller.dispose();
   });
 
+  test(
+    'probe close failure cannot override successful key validation',
+    () async {
+      final _MemoryKeyStore store = _MemoryKeyStore();
+      late _FakeLiveSession probe;
+      final ConversationController controller = ConversationController(
+        keyStore: store,
+        audioCapture: _FakeAudioCapture(),
+        playback: _FakePlayback(),
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) {
+              probe = _FakeLiveSession(
+                closeError: StateError('probe socket already closed'),
+              );
+              return probe;
+            },
+      );
+
+      await controller.initialize();
+
+      expect(
+        await controller.validateAndSaveApiKey(
+          candidate: 'memory-only-key',
+          remember: false,
+        ),
+        isTrue,
+      );
+      expect(controller.phase, ConversationPhase.idle);
+      expect(controller.hasApiKey, isTrue);
+      expect(store.value, isNull);
+      expect(probe.closeCount, 1);
+      controller.dispose();
+    },
+  );
+
   test('restores and persists only the last valid language pair', () async {
     final _MemoryLanguagePairStore languageStore = _MemoryLanguagePairStore(
       const StoredLanguagePair(languageA: 'ja', languageB: 'fr'),

@@ -212,23 +212,50 @@ class RecordAudioCaptureGateway implements AudioCaptureGateway {
         StackTrace.current,
       );
     }
-    await _stateSubscription?.cancel();
-    _stateSubscription = null;
-    await _rawSubscription?.cancel();
-    _rawSubscription = null;
-    if (await _recorder.isRecording()) {
-      await _recorder.stop();
+    try {
+      await _stateSubscription?.cancel();
+    } catch (_) {
+      // A failing callback subscription must not strand the audio stream or
+      // native recorder.
+    } finally {
+      _stateSubscription = null;
+    }
+    try {
+      await _rawSubscription?.cancel();
+    } catch (_) {
+      // Continue with the authoritative native stop below.
+    } finally {
+      _rawSubscription = null;
+    }
+    var shouldStopRecorder = true;
+    try {
+      shouldStopRecorder = await _recorder.isRecording();
+    } catch (_) {
+      // If state cannot be queried, fail safe and attempt the idempotent stop.
+    }
+    if (shouldStopRecorder) {
+      try {
+        await _recorder.stop();
+      } catch (_) {
+        // Local stream ownership is still released below. dispose() also
+        // invokes the backend's terminal release when the gateway is retired.
+      }
     }
     final StreamController<Uint8List>? output = _output;
     _output = null;
     if (output != null && !output.isClosed) {
-      final Future<void> closed = output.close();
-      // A single-subscription controller intentionally buffers the first PCM
-      // chunk until the caller attaches. Its close Future does not complete if
-      // startup failed before a listener existed, so cleanup must not wait in
-      // that case.
-      if (output.hasListener) {
-        await closed;
+      try {
+        final Future<void> closed = output.close();
+        // A single-subscription controller intentionally buffers the first PCM
+        // chunk until the caller attaches. Its close Future does not complete if
+        // startup failed before a listener existed, so cleanup must not wait in
+        // that case.
+        if (output.hasListener) {
+          await closed;
+        }
+      } catch (_) {
+        // The generation is already invalid, so no callback can publish more
+        // audio even if a listener races the close.
       }
     }
     _chunker.reset();
@@ -236,7 +263,10 @@ class RecordAudioCaptureGateway implements AudioCaptureGateway {
 
   @override
   Future<void> dispose() async {
-    await stop();
-    await _recorder.dispose();
+    try {
+      await stop();
+    } finally {
+      await _recorder.dispose();
+    }
   }
 }

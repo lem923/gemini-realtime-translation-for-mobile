@@ -144,20 +144,79 @@ void main() {
     expect(recorder.stopCount, 1);
     await gateway.dispose();
   });
+
+  test(
+    'state subscription cancellation failure cannot abort capture cleanup',
+    () async {
+      final _FakeRecorderBackend recorder = _FakeRecorderBackend(
+        failStateCancellation: true,
+      );
+      final RecordAudioCaptureGateway gateway = RecordAudioCaptureGateway(
+        recorder: recorder,
+        startupTimeout: const Duration(seconds: 1),
+      );
+
+      final Future<Stream<Uint8List>> starting = gateway.start();
+      await Future<void>.delayed(Duration.zero);
+      recorder.audio.add(Uint8List(inputChunkBytes));
+      final Stream<Uint8List> stream = await starting;
+      final Completer<void> streamClosed = Completer<void>();
+      final StreamSubscription<Uint8List> outputSubscription = stream.listen(
+        (_) {},
+        onDone: streamClosed.complete,
+      );
+
+      await gateway.stop();
+
+      await streamClosed.future.timeout(const Duration(seconds: 1));
+      expect(recorder.stopCount, 1);
+      expect(recorder.recording, isFalse);
+      await outputSubscription.cancel();
+      await gateway.dispose();
+    },
+  );
+
+  test('recorder state query failure still attempts native stop', () async {
+    final _FakeRecorderBackend recorder = _FakeRecorderBackend();
+    final RecordAudioCaptureGateway gateway = RecordAudioCaptureGateway(
+      recorder: recorder,
+      startupTimeout: const Duration(seconds: 1),
+    );
+
+    final Future<Stream<Uint8List>> starting = gateway.start();
+    await Future<void>.delayed(Duration.zero);
+    recorder.audio.add(Uint8List(inputChunkBytes));
+    await starting;
+    recorder.failRecordingQuery = true;
+
+    await gateway.stop();
+
+    expect(recorder.stopCount, 1);
+    expect(recorder.recording, isFalse);
+    await gateway.dispose();
+    expect(recorder.disposeCount, 1);
+  });
 }
 
 class _FakeRecorderBackend implements AudioRecorderBackend {
-  final StreamController<Uint8List> audio =
-      StreamController<Uint8List>.broadcast();
-  final StreamController<RecordState> states =
-      StreamController<RecordState>.broadcast();
+  _FakeRecorderBackend({this.failStateCancellation = false}) {
+    audio = StreamController<Uint8List>.broadcast();
+    states = StreamController<RecordState>.broadcast();
+  }
+
+  final bool failStateCancellation;
+  late final StreamController<Uint8List> audio;
+  late final StreamController<RecordState> states;
 
   RecordConfig? lastConfig;
   bool recording = false;
+  bool failRecordingQuery = false;
   int stopCount = 0;
+  int disposeCount = 0;
 
   @override
   Future<void> dispose() async {
+    disposeCount += 1;
     await audio.close();
     await states.close();
   }
@@ -166,10 +225,17 @@ class _FakeRecorderBackend implements AudioRecorderBackend {
   Future<bool> hasPermission() async => true;
 
   @override
-  Future<bool> isRecording() async => recording;
+  Future<bool> isRecording() async {
+    if (failRecordingQuery) {
+      throw StateError('recording state unavailable');
+    }
+    return recording;
+  }
 
   @override
-  Stream<RecordState> onStateChanged() => states.stream;
+  Stream<RecordState> onStateChanged() => failStateCancellation
+      ? _CancelFailingStream<RecordState>(states.stream)
+      : states.stream;
 
   @override
   Future<Stream<Uint8List>> startStream(RecordConfig config) async {
@@ -183,4 +249,61 @@ class _FakeRecorderBackend implements AudioRecorderBackend {
     recording = false;
     stopCount += 1;
   }
+}
+
+class _CancelFailingStream<T> extends Stream<T> {
+  const _CancelFailingStream(this._delegate);
+
+  final Stream<T> _delegate;
+
+  @override
+  StreamSubscription<T> listen(
+    void Function(T event)? onData, {
+    Function? onError,
+    void Function()? onDone,
+    bool? cancelOnError,
+  }) {
+    return _CancelFailingSubscription<T>(
+      _delegate.listen(
+        onData,
+        onError: onError,
+        onDone: onDone,
+        cancelOnError: cancelOnError,
+      ),
+    );
+  }
+}
+
+class _CancelFailingSubscription<T> implements StreamSubscription<T> {
+  const _CancelFailingSubscription(this._delegate);
+
+  final StreamSubscription<T> _delegate;
+
+  @override
+  Future<void> cancel() async {
+    await _delegate.cancel();
+    throw StateError('state cancel failed');
+  }
+
+  @override
+  void onData(void Function(T data)? handleData) =>
+      _delegate.onData(handleData);
+
+  @override
+  void onError(Function? handleError) => _delegate.onError(handleError);
+
+  @override
+  void onDone(void Function()? handleDone) => _delegate.onDone(handleDone);
+
+  @override
+  void pause([Future<void>? resumeSignal]) => _delegate.pause(resumeSignal);
+
+  @override
+  void resume() => _delegate.resume();
+
+  @override
+  bool get isPaused => _delegate.isPaused;
+
+  @override
+  Future<E> asFuture<E>([E? futureValue]) => _delegate.asFuture<E>(futureValue);
 }
