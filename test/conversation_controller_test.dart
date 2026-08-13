@@ -1166,7 +1166,7 @@ void main() {
     'capture startup failure closes the already connected session',
     () async {
       final _FakeAudioCapture capture = _FakeAudioCapture(
-        startError: StateError('capture unavailable'),
+        startError: const AudioCaptureStartupException(),
       );
       final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
       final ConversationController controller = ConversationController(
@@ -1185,6 +1185,7 @@ void main() {
       await controller.startConversation();
 
       expect(controller.phase, ConversationPhase.failed);
+      expect(controller.errorMessage, contains('麦克风无法开始采集'));
       expect(controller.isBusy, isFalse);
       expect(capture.stopped, isTrue);
       expect(sessions, hasLength(1));

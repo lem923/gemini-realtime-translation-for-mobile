@@ -368,7 +368,7 @@ class ConversationController extends ChangeNotifier {
       notifyListeners();
       final SpeakerSide standby = _otherSide(_activeSpeaker);
       unawaited(_ensureSession(standby).catchError((Object _) {}));
-    } catch (_) {
+    } catch (error) {
       if (!_isCurrentConversation(generation)) {
         return;
       }
@@ -377,7 +377,11 @@ class ConversationController extends ChangeNotifier {
         await stopping;
         return;
       }
-      final String message = _errorMessage ?? '无法启动翻译，请检查网络和 API Key';
+      final String message =
+          _errorMessage ??
+          (error is AudioCaptureStartupException
+              ? '麦克风无法开始采集，请检查麦克风后重试'
+              : '无法启动翻译，请检查网络和 API Key');
       final ConversationPhase failurePhase = switch (_phase) {
         ConversationPhase.offline => ConversationPhase.offline,
         ConversationPhase.rateLimited => ConversationPhase.rateLimited,

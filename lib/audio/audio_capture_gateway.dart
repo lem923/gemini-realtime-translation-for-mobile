@@ -13,6 +13,47 @@ abstract interface class AudioCaptureGateway {
   Future<void> dispose();
 }
 
+class AudioCaptureStartupException implements Exception {
+  const AudioCaptureStartupException();
+}
+
+abstract interface class AudioRecorderBackend {
+  Future<bool> hasPermission();
+  Stream<RecordState> onStateChanged();
+  Future<Stream<Uint8List>> startStream(RecordConfig config);
+  Future<bool> isRecording();
+  Future<void> stop();
+  Future<void> dispose();
+}
+
+class PackageAudioRecorderBackend implements AudioRecorderBackend {
+  PackageAudioRecorderBackend([AudioRecorder? recorder])
+    : _recorder = recorder ?? AudioRecorder();
+
+  final AudioRecorder _recorder;
+
+  @override
+  Future<bool> hasPermission() => _recorder.hasPermission();
+
+  @override
+  Stream<RecordState> onStateChanged() => _recorder.onStateChanged();
+
+  @override
+  Future<Stream<Uint8List>> startStream(RecordConfig config) =>
+      _recorder.startStream(config);
+
+  @override
+  Future<bool> isRecording() => _recorder.isRecording();
+
+  @override
+  Future<void> stop() async {
+    await _recorder.stop();
+  }
+
+  @override
+  Future<void> dispose() => _recorder.dispose();
+}
+
 /// Capture settings shared by the Android-first implementation and the future
 /// iOS adapter. Android routing remains owned by the native playback adapter so
 /// capture and translated playback cannot issue competing Bluetooth requests.
@@ -35,10 +76,14 @@ const RecordConfig liveTranslationRecordConfig = RecordConfig(
 );
 
 class RecordAudioCaptureGateway implements AudioCaptureGateway {
-  RecordAudioCaptureGateway({AudioRecorder? recorder})
-    : _recorder = recorder ?? AudioRecorder();
+  RecordAudioCaptureGateway({
+    AudioRecorderBackend? recorder,
+    this.startupTimeout = const Duration(seconds: 3),
+  }) : _recorder = recorder ?? PackageAudioRecorderBackend();
 
-  final AudioRecorder _recorder;
+  final AudioRecorderBackend _recorder;
+  final Duration startupTimeout;
+  StreamSubscription<RecordState>? _stateSubscription;
   StreamSubscription<Uint8List>? _rawSubscription;
   StreamController<Uint8List>? _output;
   PcmChunker _chunker = PcmChunker(chunkSizeBytes: inputChunkBytes);
@@ -52,24 +97,83 @@ class RecordAudioCaptureGateway implements AudioCaptureGateway {
     _chunker = PcmChunker(chunkSizeBytes: inputChunkBytes);
     final StreamController<Uint8List> output = StreamController<Uint8List>();
     _output = output;
-    final Stream<Uint8List> raw = await _recorder.startStream(
-      liveTranslationRecordConfig,
-    );
-    _rawSubscription = raw.listen(
-      (Uint8List bytes) {
-        for (final Uint8List chunk in _chunker.add(bytes)) {
-          output.add(chunk);
+    final Completer<void> startup = Completer<void>();
+    bool captureReady = false;
+    bool failureReported = false;
+
+    void reportFailure(Object error, StackTrace stackTrace) {
+      if (!captureReady) {
+        if (!startup.isCompleted) {
+          startup.completeError(
+            const AudioCaptureStartupException(),
+            stackTrace,
+          );
         }
-      },
-      onError: output.addError,
-      onDone: output.close,
+        return;
+      }
+      if (!failureReported && !output.isClosed) {
+        failureReported = true;
+        output.addError(error, stackTrace);
+      }
+    }
+
+    _stateSubscription = _recorder.onStateChanged().listen(
+      (_) {},
+      onError: reportFailure,
       cancelOnError: false,
     );
-    return output.stream;
+
+    try {
+      final Stream<Uint8List> raw = await _recorder.startStream(
+        liveTranslationRecordConfig,
+      );
+      _rawSubscription = raw.listen(
+        (Uint8List bytes) {
+          for (final Uint8List chunk in _chunker.add(bytes)) {
+            output.add(chunk);
+            if (!captureReady) {
+              captureReady = true;
+              startup.complete();
+            }
+          }
+        },
+        onError: reportFailure,
+        onDone: () {
+          if (!captureReady) {
+            reportFailure(
+              const AudioCaptureStartupException(),
+              StackTrace.current,
+            );
+          } else if (!output.isClosed) {
+            unawaited(output.close());
+          }
+        },
+        cancelOnError: false,
+      );
+      await startup.future.timeout(startupTimeout);
+      return output.stream;
+    } on AudioCaptureStartupException {
+      await stop();
+      rethrow;
+    } on TimeoutException catch (_, stackTrace) {
+      await stop();
+      Error.throwWithStackTrace(
+        const AudioCaptureStartupException(),
+        stackTrace,
+      );
+    } catch (error, stackTrace) {
+      await stop();
+      Error.throwWithStackTrace(
+        const AudioCaptureStartupException(),
+        stackTrace,
+      );
+    }
   }
 
   @override
   Future<void> stop() async {
+    await _stateSubscription?.cancel();
+    _stateSubscription = null;
     await _rawSubscription?.cancel();
     _rawSubscription = null;
     if (await _recorder.isRecording()) {
@@ -78,7 +182,14 @@ class RecordAudioCaptureGateway implements AudioCaptureGateway {
     final StreamController<Uint8List>? output = _output;
     _output = null;
     if (output != null && !output.isClosed) {
-      await output.close();
+      final Future<void> closed = output.close();
+      // A single-subscription controller intentionally buffers the first PCM
+      // chunk until the caller attaches. Its close Future does not complete if
+      // startup failed before a listener existed, so cleanup must not wait in
+      // that case.
+      if (output.hasListener) {
+        await closed;
+      }
     }
     _chunker.reset();
   }
