@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:realtime_translation/conversation/sentence_translator.dart';
 import 'package:realtime_translation/shared/translation_language.dart';
@@ -15,13 +14,12 @@ Future<void> main(List<String> arguments) async {
     exitCode = 64;
     return;
   }
-  final Uint8List pcm = await File(pcmPath).readAsBytes();
   final RestSentenceTranslator translator = RestSentenceTranslator();
   final Stopwatch stopwatch = Stopwatch()..start();
   try {
     final SentenceTextTranslation result = await translator.translate(
       apiKey: apiKey,
-      pcm: pcm,
+      sourceText: '你 好 , 请 问 这 家 酒 店 的 房 间 多 少 钱 一 晚 ? 早 餐 是 免 费 的 吗 ?',
       source: languageByCode('zh-Hans'),
       target: languageByCode('en'),
       context: const <SentenceContextTurn>[],

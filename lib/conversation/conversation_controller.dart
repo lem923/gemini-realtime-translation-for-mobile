@@ -29,6 +29,7 @@ class ConversationController extends ChangeNotifier {
     PcmPlaybackGateway? playback,
     HeadsetCaptureGateway? headsetCapture,
     SentenceTranslator? sentenceTranslator,
+    SentenceAsr? sentenceAsr,
     TextToSpeech? textToSpeech,
     LanguagePairStore? languagePairStore,
     MicrophonePermissionGateway? permissionGateway,
@@ -40,6 +41,7 @@ class ConversationController extends ChangeNotifier {
        _playback = playback ?? PlatformPcmPlaybackGateway(),
        _headsetCapture = headsetCapture ?? NativeHeadsetCaptureGateway(),
        _sentenceTranslator = sentenceTranslator ?? RestSentenceTranslator(),
+       _sentenceAsr = sentenceAsr ?? LiveApiSentenceAsr(apiKey: ''),
        _textToSpeech = textToSpeech ?? TextToSpeechGateway(),
        _languagePairStore =
            languagePairStore ?? const DisabledLanguagePairStore(),
@@ -59,6 +61,7 @@ class ConversationController extends ChangeNotifier {
   final PcmPlaybackGateway _playback;
   final HeadsetCaptureGateway _headsetCapture;
   final SentenceTranslator _sentenceTranslator;
+  SentenceAsr _sentenceAsr;
   final TextToSpeech _textToSpeech;
   final LanguagePairStore _languagePairStore;
   final MicrophonePermissionGateway _permissionGateway;
@@ -756,10 +759,15 @@ class ConversationController extends ChangeNotifier {
       return;
     }
     if (_mode == ConversationMode.sentenceBySentence) {
-      // Push-to-talk: while the button is held, forwarded speech is recorded
-      // locally (no live session needed); release runs the offline pipeline.
+      // Push-to-talk: forwarded speech streams to the live ASR session while
+      // the button is held; the pre-ready window is buffered and flushed
+      // once the session is up.
       if (_pttActive && decision == SpeechGateDecision.forward) {
-        _pttBuffer.add(chunk);
+        if (_sentenceAsr.isReady) {
+          _sentenceAsr.addPcm(chunk);
+        } else {
+          _pttBuffer.add(chunk);
+        }
       } else if (decision == SpeechGateDecision.hold ||
           decision == SpeechGateDecision.finalize) {
         _microphoneChunksHeld += 1;
@@ -870,6 +878,9 @@ class ConversationController extends ChangeNotifier {
     }
     _pttActive = true;
     _pttBuffer = BytesBuilder(copy: true);
+    if (!_sentenceAsr.isReady && _apiKey.isNotEmpty) {
+      unawaited(_ensureSentenceAsrReady());
+    }
     _errorMessage = null;
     // Cut any translation still playing so the new utterance wins.
     unawaited(_flushPlayback());
@@ -882,24 +893,47 @@ class ConversationController extends ChangeNotifier {
     }
     _pttActive = false;
     notifyListeners();
-    final Uint8List audio = _pttBuffer.takeBytes();
+    _pttBuffer.takeBytes();
     _pttBuffer = BytesBuilder(copy: true);
-    if (audio.isEmpty) {
-      return;
-    }
-    unawaited(_runSentencePipeline(audio));
+    // Audio streamed live to the ASR while held; the pre-ready window was
+    // flushed to the session once it became ready.
+    unawaited(_runSentencePipeline());
   }
 
-  Future<void> _runSentencePipeline(Uint8List audio) async {
+  Future<void> _ensureSentenceAsrReady() async {
+    try {
+      await _sentenceAsr.connect();
+      if (_pttActive && _pttBuffer.length > 0) {
+        final Uint8List buffered = _pttBuffer.takeBytes();
+        _pttBuffer = BytesBuilder(copy: true);
+        for (
+          int offset = 0;
+          offset < buffered.length;
+          offset += inputChunkBytes
+        ) {
+          final int end = (offset + inputChunkBytes).clamp(0, buffered.length);
+          _sentenceAsr.addPcm(Uint8List.sublistView(buffered, offset, end));
+        }
+      }
+    } catch (_) {
+      // The next press retries; the release path surfaces the failure.
+    }
+  }
+
+  Future<void> _runSentencePipeline() async {
     if (_disposed) {
       return;
     }
     _pipelineStatus = SentencePipelineStatus.recognizing;
     notifyListeners();
     try {
+      final String sourceText = await _sentenceAsr.finalize();
+      if (_disposed) {
+        return;
+      }
       final SentenceTextTranslation texts = await _sentenceTranslator.translate(
         apiKey: _apiKey,
-        pcm: audio,
+        sourceText: sourceText,
         source: activeSourceLanguage,
         target: activeTargetLanguage,
         context: _sentenceContext
@@ -924,7 +958,7 @@ class ConversationController extends ChangeNotifier {
       _sentenceContext.add(
         SentenceContextTurn(
           sourceLanguageCode: activeSourceLanguage.code,
-          sourceText: texts.sourceText,
+          sourceText: sourceText,
           translatedText: texts.translatedText,
           createdAt: DateTime.now(),
         ),
@@ -961,6 +995,12 @@ class ConversationController extends ChangeNotifier {
       _queuePlayback(Uint8List.sublistView(pcm, offset, end));
       await _waitForPlayback();
     }
+  }
+
+  Future<void> _disposeSentenceAsr() async {
+    final SentenceAsr current = _sentenceAsr;
+    _sentenceAsr = LiveApiSentenceAsr(apiKey: _apiKey);
+    await current.dispose();
   }
 
   void _commitSentenceTurn(
@@ -1965,6 +2005,7 @@ class ConversationController extends ChangeNotifier {
     _commitTurn(_activeSpeaker);
     _pttActive = false;
     _pipelineStatus = SentencePipelineStatus.idle;
+    unawaited(_disposeSentenceAsr());
     _clearAllSentencePlayback();
     final StreamSubscription<Uint8List>? captureSubscription =
         _captureSubscription;

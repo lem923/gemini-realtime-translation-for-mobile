@@ -66,6 +66,7 @@ void main() {
         headsetCapture: _FakeHeadsetCapture(),
         sentenceTranslator: _FakeSentenceTranslator(),
         textToSpeech: _FakeTextToSpeech(),
+        sentenceAsr: _FakeSentenceAsr(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
               probe = _FakeLiveSession(
@@ -103,6 +104,7 @@ void main() {
         headsetCapture: _FakeHeadsetCapture(),
         sentenceTranslator: _FakeSentenceTranslator(),
         textToSpeech: _FakeTextToSpeech(),
+        sentenceAsr: _FakeSentenceAsr(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) =>
                 _FakeLiveSession(),
@@ -138,6 +140,7 @@ void main() {
         headsetCapture: _FakeHeadsetCapture(),
         sentenceTranslator: _FakeSentenceTranslator(),
         textToSpeech: _FakeTextToSpeech(),
+        sentenceAsr: _FakeSentenceAsr(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) =>
                 _FakeLiveSession(),
@@ -174,6 +177,7 @@ void main() {
         headsetCapture: _FakeHeadsetCapture(),
         sentenceTranslator: _FakeSentenceTranslator(),
         textToSpeech: _FakeTextToSpeech(),
+        sentenceAsr: _FakeSentenceAsr(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) =>
                 _FakeLiveSession(),
@@ -263,6 +267,7 @@ void main() {
         headsetCapture: _FakeHeadsetCapture(),
         sentenceTranslator: _FakeSentenceTranslator(),
         textToSpeech: _FakeTextToSpeech(),
+        sentenceAsr: _FakeSentenceAsr(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) =>
                 _FakeLiveSession(),
@@ -286,6 +291,7 @@ void main() {
         headsetCapture: _FakeHeadsetCapture(),
         sentenceTranslator: _FakeSentenceTranslator(),
         textToSpeech: _FakeTextToSpeech(),
+        sentenceAsr: _FakeSentenceAsr(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) =>
                 _FakeLiveSession(),
@@ -379,6 +385,7 @@ void main() {
         headsetCapture: _FakeHeadsetCapture(),
         sentenceTranslator: _FakeSentenceTranslator(),
         textToSpeech: _FakeTextToSpeech(),
+        sentenceAsr: _FakeSentenceAsr(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) =>
                 _FakeLiveSession(
@@ -414,6 +421,7 @@ void main() {
         headsetCapture: _FakeHeadsetCapture(),
         sentenceTranslator: _FakeSentenceTranslator(),
         textToSpeech: _FakeTextToSpeech(),
+        sentenceAsr: _FakeSentenceAsr(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) =>
                 _FakeLiveSession(
@@ -451,6 +459,7 @@ void main() {
         headsetCapture: _FakeHeadsetCapture(),
         sentenceTranslator: _FakeSentenceTranslator(),
         textToSpeech: _FakeTextToSpeech(),
+        sentenceAsr: _FakeSentenceAsr(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
               final _FakeLiveSession session = _FakeLiveSession();
@@ -511,6 +520,7 @@ void main() {
       final _FakeAudioCapture capture = _FakeAudioCapture();
       final _FakePlayback playback = _FakePlayback();
       final _FakeSentenceTranslator translator = _FakeSentenceTranslator();
+      final _FakeSentenceAsr asr = _FakeSentenceAsr();
       final _FakeTextToSpeech tts = _FakeTextToSpeech();
       final ConversationController controller = ConversationController(
         keyStore: _MemoryKeyStore('stored-key'),
@@ -518,6 +528,7 @@ void main() {
         playback: playback,
         headsetCapture: _FakeHeadsetCapture(),
         sentenceTranslator: translator,
+        sentenceAsr: asr,
         textToSpeech: tts,
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) =>
@@ -535,14 +546,14 @@ void main() {
       await _flushEvents();
       await _flushEvents();
 
+      expect(asr.streamedPcm, hasLength(3));
+      expect(asr.finalizeCalls, 1);
       expect(translator.calls, 1);
-      expect(translator.lastPcm, isNotNull);
-      expect(translator.lastPcm!.length, inputChunkBytes * 3);
       expect(translator.lastContext, isEmpty);
       expect(tts.calls, 1);
       expect(playback.enqueued, hasLength(1));
       expect(controller.turns, hasLength(1));
-      expect(controller.turns.single.sourceText, 'fake source');
+      expect(controller.turns.single.sourceText, 'fake asr transcript');
       expect(controller.turns.single.translatedText, 'fake translation');
       expect(controller.hasReplayAudio(controller.turns.single.id), isTrue);
 
@@ -565,6 +576,7 @@ void main() {
         headsetCapture: _FakeHeadsetCapture(),
         sentenceTranslator: translator,
         textToSpeech: tts,
+        sentenceAsr: _FakeSentenceAsr(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) =>
                 _FakeLiveSession(),
@@ -589,7 +601,7 @@ void main() {
 
       expect(translator.calls, 2);
       expect(translator.lastContext, hasLength(1));
-      expect(translator.lastContext!.single.sourceText, 'fake source');
+      expect(translator.lastContext!.single.sourceText, 'fake asr transcript');
       expect(controller.turns, hasLength(2));
       expect(controller.pipelineStatus, SentencePipelineStatus.idle);
 
@@ -611,6 +623,7 @@ void main() {
         headsetCapture: _FakeHeadsetCapture(),
         sentenceTranslator: _FakeSentenceTranslator(),
         textToSpeech: _FakeTextToSpeech(),
+        sentenceAsr: _FakeSentenceAsr(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
               final _FakeLiveSession session = _FakeLiveSession();
@@ -654,6 +667,7 @@ void main() {
         headsetCapture: _FakeHeadsetCapture(),
         sentenceTranslator: _FakeSentenceTranslator(),
         textToSpeech: _FakeTextToSpeech(),
+        sentenceAsr: _FakeSentenceAsr(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
               final _FakeLiveSession session = _FakeLiveSession();
@@ -753,6 +767,7 @@ void main() {
     () async {
       final _FakeAudioCapture capture = _FakeAudioCapture();
       final _FakeSentenceTranslator translator = _FakeSentenceTranslator();
+      final _FakeSentenceAsr asr = _FakeSentenceAsr();
       final _FakeTextToSpeech tts = _FakeTextToSpeech();
       final ConversationController controller = ConversationController(
         keyStore: _MemoryKeyStore('stored-key'),
@@ -760,6 +775,7 @@ void main() {
         playback: _FakePlayback(),
         headsetCapture: _FakeHeadsetCapture(),
         sentenceTranslator: translator,
+        sentenceAsr: asr,
         textToSpeech: tts,
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) =>
@@ -780,7 +796,7 @@ void main() {
       await _flushEvents();
 
       expect(translator.calls, 1);
-      expect(translator.lastPcm!.length, inputChunkBytes * 2);
+      expect(asr.streamedPcm, hasLength(2));
 
       await controller.stopConversation();
       controller.dispose();
@@ -800,6 +816,7 @@ void main() {
       headsetCapture: _FakeHeadsetCapture(),
       sentenceTranslator: translator,
       textToSpeech: tts,
+      sentenceAsr: _FakeSentenceAsr(),
       sessionFactory:
           ({required String apiKey, required String targetLanguageCode}) =>
               _FakeLiveSession(),
@@ -879,6 +896,7 @@ void main() {
         headsetCapture: _FakeHeadsetCapture(),
         sentenceTranslator: _FakeSentenceTranslator(),
         textToSpeech: _FakeTextToSpeech(),
+        sentenceAsr: _FakeSentenceAsr(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
               final _FakeLiveSession session = _FakeLiveSession();
@@ -953,6 +971,7 @@ void main() {
         headsetCapture: _FakeHeadsetCapture(),
         sentenceTranslator: translator,
         textToSpeech: tts,
+        sentenceAsr: _FakeSentenceAsr(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) =>
                 _FakeLiveSession(),
@@ -965,7 +984,10 @@ void main() {
       capture.emit(_speechChunk());
       capture.emit(_speechChunk());
       controller.endUtterance();
-      await _flushEvents();
+      for (int i = 0; i < 6; i += 1) {
+        await _flushEvents();
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 50));
       await _flushEvents();
 
       expect(controller.audioMuted, isTrue);
@@ -989,6 +1011,7 @@ void main() {
         headsetCapture: _FakeHeadsetCapture(),
         sentenceTranslator: _FakeSentenceTranslator(),
         textToSpeech: _FakeTextToSpeech(),
+        sentenceAsr: _FakeSentenceAsr(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) =>
                 _FakeLiveSession(),
@@ -1128,6 +1151,7 @@ void main() {
         headsetCapture: _FakeHeadsetCapture(),
         sentenceTranslator: _FakeSentenceTranslator(),
         textToSpeech: _FakeTextToSpeech(),
+        sentenceAsr: _FakeSentenceAsr(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
               final _FakeLiveSession session = _FakeLiveSession();
@@ -1173,6 +1197,7 @@ void main() {
         headsetCapture: _FakeHeadsetCapture(),
         sentenceTranslator: _FakeSentenceTranslator(),
         textToSpeech: _FakeTextToSpeech(),
+        sentenceAsr: _FakeSentenceAsr(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
               final _FakeLiveSession session = _FakeLiveSession();
@@ -1227,6 +1252,7 @@ void main() {
         headsetCapture: _FakeHeadsetCapture(),
         sentenceTranslator: translator,
         textToSpeech: tts,
+        sentenceAsr: _FakeSentenceAsr(),
         monotonicMicros: () => nowMicros,
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
@@ -1435,6 +1461,7 @@ void main() {
         headsetCapture: _FakeHeadsetCapture(),
         sentenceTranslator: _FakeSentenceTranslator(),
         textToSpeech: _FakeTextToSpeech(),
+        sentenceAsr: _FakeSentenceAsr(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
               final _FakeLiveSession session = _FakeLiveSession(
@@ -1546,6 +1573,7 @@ void main() {
         headsetCapture: _FakeHeadsetCapture(),
         sentenceTranslator: _FakeSentenceTranslator(),
         textToSpeech: _FakeTextToSpeech(),
+        sentenceAsr: _FakeSentenceAsr(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
               final _FakeLiveSession session = _FakeLiveSession(
@@ -1592,6 +1620,7 @@ void main() {
         headsetCapture: _FakeHeadsetCapture(),
         sentenceTranslator: _FakeSentenceTranslator(),
         textToSpeech: _FakeTextToSpeech(),
+        sentenceAsr: _FakeSentenceAsr(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
               final _FakeLiveSession session = _FakeLiveSession();
@@ -1640,6 +1669,7 @@ void main() {
         headsetCapture: _FakeHeadsetCapture(),
         sentenceTranslator: _FakeSentenceTranslator(),
         textToSpeech: _FakeTextToSpeech(),
+        sentenceAsr: _FakeSentenceAsr(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
               requestedKeys.add(apiKey);
@@ -1802,6 +1832,7 @@ void main() {
         headsetCapture: _FakeHeadsetCapture(),
         sentenceTranslator: _FakeSentenceTranslator(),
         textToSpeech: _FakeTextToSpeech(),
+        sentenceAsr: _FakeSentenceAsr(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
               final _FakeLiveSession session = _FakeLiveSession();
@@ -1946,6 +1977,7 @@ void main() {
         headsetCapture: _FakeHeadsetCapture(),
         sentenceTranslator: _FakeSentenceTranslator(),
         textToSpeech: _FakeTextToSpeech(),
+        sentenceAsr: _FakeSentenceAsr(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
               final _FakeLiveSession session = _FakeLiveSession();
@@ -1985,6 +2017,7 @@ void main() {
         headsetCapture: _FakeHeadsetCapture(),
         sentenceTranslator: _FakeSentenceTranslator(),
         textToSpeech: _FakeTextToSpeech(),
+        sentenceAsr: _FakeSentenceAsr(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
               final _FakeLiveSession session = _FakeLiveSession();
@@ -2029,6 +2062,7 @@ void main() {
         headsetCapture: _FakeHeadsetCapture(),
         sentenceTranslator: _FakeSentenceTranslator(),
         textToSpeech: _FakeTextToSpeech(),
+        sentenceAsr: _FakeSentenceAsr(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
               final _FakeLiveSession session = _FakeLiveSession();
@@ -2065,6 +2099,7 @@ void main() {
     () async {
       final _FakeAudioCapture capture = _FakeAudioCapture();
       final _FakeSentenceTranslator translator = _FakeSentenceTranslator();
+      final _FakeSentenceAsr asr = _FakeSentenceAsr();
       final _FakeTextToSpeech tts = _FakeTextToSpeech();
       final ConversationController controller = ConversationController(
         keyStore: _MemoryKeyStore('stored-key'),
@@ -2072,6 +2107,7 @@ void main() {
         playback: _FakePlayback(),
         headsetCapture: _FakeHeadsetCapture(),
         sentenceTranslator: translator,
+        sentenceAsr: asr,
         textToSpeech: tts,
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) =>
@@ -2097,11 +2133,7 @@ void main() {
       // Silence before speech is gated out; speech is buffered; the trailing
       // silence inside the utterance window is kept.
       expect(translator.calls, 1);
-      expect(translator.lastPcm, isNotNull);
-      expect(
-        translator.lastPcm!.length,
-        greaterThanOrEqualTo(inputChunkBytes * 2),
-      );
+      expect(asr.streamedPcm.length, greaterThanOrEqualTo(2));
 
       await controller.stopConversation();
       controller.dispose();
@@ -2122,6 +2154,7 @@ void main() {
         headsetCapture: _FakeHeadsetCapture(),
         sentenceTranslator: translator,
         textToSpeech: tts,
+        sentenceAsr: _FakeSentenceAsr(),
         monotonicMicros: () => nowMicros,
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) =>
@@ -2170,6 +2203,7 @@ void main() {
         headsetCapture: _FakeHeadsetCapture(),
         sentenceTranslator: _FakeSentenceTranslator(),
         textToSpeech: _FakeTextToSpeech(),
+        sentenceAsr: _FakeSentenceAsr(),
         monotonicMicros: () => nowMicros,
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
@@ -2213,6 +2247,7 @@ void main() {
       headsetCapture: _FakeHeadsetCapture(),
       sentenceTranslator: _FakeSentenceTranslator(),
       textToSpeech: _FakeTextToSpeech(),
+      sentenceAsr: _FakeSentenceAsr(),
       sessionFactory:
           ({required String apiKey, required String targetLanguageCode}) {
             final _FakeLiveSession session = _FakeLiveSession();
@@ -2379,6 +2414,7 @@ void main() {
         headsetCapture: _FakeHeadsetCapture(),
         sentenceTranslator: _FakeSentenceTranslator(),
         textToSpeech: _FakeTextToSpeech(),
+        sentenceAsr: _FakeSentenceAsr(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
               final _FakeLiveSession session = _FakeLiveSession();
@@ -2412,6 +2448,7 @@ void main() {
         headsetCapture: _FakeHeadsetCapture(),
         sentenceTranslator: _FakeSentenceTranslator(),
         textToSpeech: _FakeTextToSpeech(),
+        sentenceAsr: _FakeSentenceAsr(),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
               final _FakeLiveSession session = _FakeLiveSession(
@@ -2785,6 +2822,43 @@ class _FakeHeadsetCapture implements HeadsetCaptureGateway {
   }
 }
 
+class _FakeSentenceAsr implements SentenceAsr {
+  bool ready = true;
+  final List<Uint8List> streamedPcm = <Uint8List>[];
+  int finalizeCalls = 0;
+  String transcript = 'fake asr transcript';
+  Object? error;
+
+  @override
+  Future<void> connect() async {
+    ready = true;
+  }
+
+  @override
+  bool get isReady => ready;
+
+  @override
+  String? get failure => null;
+
+  @override
+  void addPcm(Uint8List chunk) {
+    streamedPcm.add(chunk);
+  }
+
+  @override
+  Future<String> finalize() async {
+    finalizeCalls += 1;
+    final Object? failure = error;
+    if (failure != null) {
+      throw failure;
+    }
+    return transcript;
+  }
+
+  @override
+  Future<void> dispose() async {}
+}
+
 class _FakeSentenceTranslator implements SentenceTranslator {
   String sourceText = 'fake source';
   String translatedText = 'fake translation';
@@ -2796,13 +2870,13 @@ class _FakeSentenceTranslator implements SentenceTranslator {
   @override
   Future<SentenceTextTranslation> translate({
     required String apiKey,
-    required Uint8List pcm,
+    required String sourceText,
     required TranslationLanguage source,
     required TranslationLanguage target,
     required List<SentenceContextTurn> context,
   }) async {
     calls += 1;
-    lastPcm = pcm;
+    lastPcm = null;
     lastContext = context;
     final Object? failure = error;
     if (failure != null) {

@@ -32,15 +32,123 @@ class SentenceTextTranslation {
   final String translatedText;
 }
 
-/// Two-stage offline sentence pipeline for 逐句翻译:
-/// 1. ASR with a model that accepts inline audio (gemini-2.5-pro verified).
-/// 2. Correct + translate with a cheap text model, using a short context
-///    window to repair disfluencies and accents.
-/// The caller then plays [SentenceTranslation.pcm] (system TTS output).
+/// Streaming ASR session for 逐句翻译 push-to-talk: PCM streams to the
+/// audio-native flash live model while the button is held, so the transcript
+/// is ready almost immediately after release.
+abstract interface class SentenceAsr {
+  Future<void> connect();
+  bool get isReady;
+  String? get failure;
+  void addPcm(Uint8List chunk);
+  Future<String> finalize();
+  Future<void> dispose();
+}
+
+class LiveApiSentenceAsr implements SentenceAsr {
+  LiveApiSentenceAsr({
+    required this.apiKey,
+    this.model = 'gemini-3.1-flash-live-preview',
+  });
+
+  final String apiKey;
+  final String model;
+
+  static const int _transcriptionSettleMicros = 1500000;
+
+  GeminiLiveSession? _session;
+  StreamSubscription<LiveEvent>? _subscription;
+  final StringBuffer _transcript = StringBuffer();
+  int _lastGrowthMicros = 0;
+  bool _ready = false;
+  String? _failure;
+
+  @override
+  bool get isReady => _ready;
+
+  @override
+  String? get failure => _failure;
+
+  @override
+  Future<void> connect() async {
+    if (_session != null) {
+      return;
+    }
+    final GeminiLiveSession session = GeminiLiveSession(
+      apiKey: apiKey,
+      targetLanguageCode: 'en',
+      model: model,
+      translationEnabled: false,
+    );
+    _session = session;
+    _subscription = session.events.listen((LiveEvent event) {
+      switch (event) {
+        case LiveInputTranscript(:final String text):
+          _transcript.write(text);
+          _lastGrowthMicros = DateTime.now().microsecondsSinceEpoch;
+        case LiveSessionFailure(:final String userMessage):
+          _failure = userMessage;
+        case LivePhaseChanged(:final LiveSessionPhase phase):
+          if (phase == LiveSessionPhase.ready) {
+            _ready = true;
+          } else if (phase == LiveSessionPhase.closed) {
+            _ready = false;
+          }
+        default:
+          break;
+      }
+    });
+    await session.connect();
+    _ready = true;
+  }
+
+  @override
+  void addPcm(Uint8List chunk) {
+    _session?.sendAudio(chunk);
+  }
+
+  @override
+  Future<String> finalize() async {
+    final GeminiLiveSession? session = _session;
+    if (session == null) {
+      throw const SentencePipelineException('语音识别会话未就绪');
+    }
+    session.endAudioStream();
+    // The transcription settles quickly after the stream end.
+    for (int i = 0; i < 40; i += 1) {
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      if (_transcript.isNotEmpty &&
+          DateTime.now().microsecondsSinceEpoch - _lastGrowthMicros >
+              _transcriptionSettleMicros) {
+        break;
+      }
+    }
+    final String text = _transcript.toString().trim();
+    if (_failure != null && text.isEmpty) {
+      throw SentencePipelineException(_failure!);
+    }
+    if (text.isEmpty) {
+      throw const SentencePipelineException('语音识别没有返回结果');
+    }
+    _transcript.clear();
+    _lastGrowthMicros = 0;
+    return text;
+  }
+
+  @override
+  Future<void> dispose() async {
+    await _subscription?.cancel();
+    _subscription = null;
+    await _session?.close();
+    _session = null;
+    _ready = false;
+  }
+}
+
+/// Text-only correction + translation for the 逐句翻译 pipeline.
 abstract interface class SentenceTranslator {
   Future<SentenceTextTranslation> translate({
     required String apiKey,
-    required Uint8List pcm,
+    required String sourceText,
     required TranslationLanguage source,
     required TranslationLanguage target,
     required List<SentenceContextTurn> context,
@@ -49,105 +157,15 @@ abstract interface class SentenceTranslator {
 
 class RestSentenceTranslator implements SentenceTranslator {
   RestSentenceTranslator({
-    // The flash live family is audio-native and cheap; the preview suffix is
-    // required on current keys. Text correction uses the latest lite alias.
-    this.asrModel = 'gemini-3.1-flash-live-preview',
     this.textModel = 'gemini-flash-lite-latest',
     this.timeout = const Duration(seconds: 60),
   });
 
-  static const int _transcriptionSettleMicros = 1500000;
-
-  final String asrModel;
   final String textModel;
   final Duration timeout;
 
   @override
-  @override
   Future<SentenceTextTranslation> translate({
-    required String apiKey,
-    required Uint8List pcm,
-    required TranslationLanguage source,
-    required TranslationLanguage target,
-    required List<SentenceContextTurn> context,
-  }) async {
-    final String sourceText = await _transcribe(apiKey: apiKey, pcm: pcm);
-    final String translation = await _correctAndTranslate(
-      apiKey: apiKey,
-      sourceText: sourceText,
-      source: source,
-      target: target,
-      context: context,
-    );
-    return SentenceTextTranslation(
-      sourceText: sourceText,
-      translatedText: translation,
-    );
-  }
-
-  /// Transcribes the recorded PCM with the audio-native flash live model.
-  /// The session is opened per turn (1-2 s), the buffered audio is streamed at
-  /// real-time pace, and the growing input transcription is accumulated.
-  Future<String> _transcribe({
-    required String apiKey,
-    required Uint8List pcm,
-  }) async {
-    final GeminiLiveSession session = GeminiLiveSession(
-      apiKey: apiKey,
-      targetLanguageCode: 'en',
-      model: asrModel,
-      translationEnabled: false,
-    );
-    final StringBuffer transcript = StringBuffer();
-    String? failure;
-    int lastGrowthMicros = 0;
-    final StreamSubscription<LiveEvent> subscription = session.events.listen((
-      LiveEvent event,
-    ) {
-      switch (event) {
-        case LiveInputTranscript(:final String text):
-          transcript.write(text);
-          lastGrowthMicros = DateTime.now().microsecondsSinceEpoch;
-        case LiveSessionFailure(:final String userMessage):
-          failure = userMessage;
-        default:
-          break;
-      }
-    });
-    try {
-      await session.connect().timeout(timeout);
-      const int chunkBytes = 3200;
-      for (int offset = 0; offset < pcm.length; offset += chunkBytes) {
-        final int end = (offset + chunkBytes).clamp(0, pcm.length);
-        session.sendAudio(Uint8List.fromList(pcm.sublist(offset, end)));
-        await Future<void>.delayed(const Duration(milliseconds: 100));
-      }
-      session.endAudioStream();
-      // The transcription settles quickly after the stream end; stop once it
-      // has not grown for a moment instead of waiting a fixed window.
-      for (int i = 0; i < 40; i += 1) {
-        await Future<void>.delayed(const Duration(milliseconds: 300));
-        final int sinceGrowth =
-            DateTime.now().microsecondsSinceEpoch - lastGrowthMicros;
-        if (transcript.isNotEmpty && sinceGrowth > _transcriptionSettleMicros) {
-          break;
-        }
-      }
-      final String text = transcript.toString().trim();
-      if (failure != null && text.isEmpty) {
-        throw SentencePipelineException(failure!);
-      }
-      if (text.isEmpty) {
-        throw const SentencePipelineException('语音识别没有返回结果');
-      }
-      return text;
-    } finally {
-      await subscription.cancel();
-      await session.close();
-    }
-  }
-
-  Future<String> _correctAndTranslate({
     required String apiKey,
     required String sourceText,
     required TranslationLanguage source,
@@ -188,10 +206,15 @@ class RestSentenceTranslator implements SentenceTranslator {
     final String raw = await _post(apiKey, '$textModel:generateContent', body);
     final String text = _extractText(raw).trim();
     if (text.isEmpty) {
-      // Fall back to the raw source text when the model returns nothing.
-      return sourceText;
+      return SentenceTextTranslation(
+        sourceText: sourceText,
+        translatedText: sourceText,
+      );
     }
-    return text;
+    return SentenceTextTranslation(
+      sourceText: sourceText,
+      translatedText: text,
+    );
   }
 
   Future<String> _post(

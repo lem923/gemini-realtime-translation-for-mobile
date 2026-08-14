@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-08-14
+
+### Changed
+
+- 逐句翻译 now streams PCM to the ASR session (gemini-3.1-flash-live-preview)
+  while the push-to-talk button is held instead of recording locally and
+  transcribing after release. The session connects at conversation start; the
+  first ~2 s pre-ready window is buffered and flushed once the session is up.
+  On release the transcript is already settled, so the remaining work is the
+  text correction (gemini-flash-lite-latest) and TTS playback.
+
+### Tests
+
+- 124 Flutter tests pass, including streaming push-to-talk, buffer-flush,
+  and pipeline regressions; Android host tests and lint pass.
+
 ## [0.27.0] - 2026-08-14
 
 ### Changed
