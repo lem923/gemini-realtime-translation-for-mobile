@@ -610,6 +610,57 @@ void main() {
   );
 
   test(
+    'sentence mode plays model tail chunks arriving after finalization',
+    () async {
+      final _FakeAudioCapture capture = _FakeAudioCapture();
+      final _FakePlayback playback = _FakePlayback();
+      final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
+      final ConversationController controller = ConversationController(
+        keyStore: _MemoryKeyStore('stored-key'),
+        audioCapture: capture,
+        playback: playback,
+        headsetCapture: _FakeHeadsetCapture(),
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) {
+              final _FakeLiveSession session = _FakeLiveSession();
+              sessions.add(session);
+              return session;
+            },
+      );
+
+      await controller.initialize();
+      controller.setMode(ConversationMode.sentenceBySentence);
+      await controller.startConversation();
+
+      controller.startUtterance();
+      capture.emit(_speechChunk());
+      capture.emit(_speechChunk());
+      await _flushEvents();
+      final _FakeLiveSession session = sessions.first;
+      session.emit(LiveAudioChunk(Uint8List(4800)));
+      await _flushEvents();
+      expect(playback.enqueued, isEmpty);
+
+      controller.endUtterance();
+      await _flushEvents();
+      await _flushEvents();
+      expect(playback.enqueued, hasLength(1));
+
+      // The model keeps streaming its tail after release; every chunk must
+      // still play, paced through the same serialized drain.
+      session
+        ..emit(LiveAudioChunk(Uint8List(4800)))
+        ..emit(LiveAudioChunk(Uint8List(4800)));
+      await _flushEvents();
+      await _flushEvents();
+      expect(playback.enqueued, hasLength(3));
+
+      await controller.stopConversation();
+      controller.dispose();
+    },
+  );
+
+  test(
     'manual speaker switch commits output without a server turn-complete event',
     () async {
       final _FakeAudioCapture capture = _FakeAudioCapture();

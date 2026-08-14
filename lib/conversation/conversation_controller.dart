@@ -1148,12 +1148,10 @@ class ConversationController extends ChangeNotifier {
 
   /// Sentence-by-sentence playback: translated audio is buffered while the
   /// speaker is still talking and starts playing only once the utterance is
-  /// finalized, so the user never hears the translation while speaking.
+  /// finalized. After finalization every chunk (including the model's tail)
+  /// flows through the same serialized drain, so playback is paced by the
+  /// native lane instead of piling up on the Dart chain.
   void _bufferSentenceAudio(SpeakerSide side, Uint8List bytes) {
-    if (_sentencePlaybackFinalized[side] == true) {
-      _queuePlayback(bytes);
-      return;
-    }
     final List<Uint8List> chunks = _sentencePlaybackChunks[side]!;
     chunks.add(bytes);
     _sentencePlaybackBytes += bytes.length;
@@ -1161,6 +1159,10 @@ class ConversationController extends ChangeNotifier {
         chunks.isNotEmpty) {
       final Uint8List removed = chunks.removeAt(0);
       _sentencePlaybackBytes -= removed.length;
+    }
+    if (_sentencePlaybackFinalized[side] == true &&
+        !_sentencePlaybackDraining[side]!) {
+      unawaited(_drainSentencePlayback(side));
     }
   }
 
@@ -1173,12 +1175,20 @@ class ConversationController extends ChangeNotifier {
   }
 
   Future<void> _drainSentencePlayback(SpeakerSide side) async {
+    if (_sentencePlaybackDraining[side]!) {
+      return;
+    }
     _sentencePlaybackDraining[side] = true;
     try {
       while (!_disposed && !_playbackFailureReported) {
         final List<Uint8List> chunks = _sentencePlaybackChunks[side]!;
         if (chunks.isEmpty) {
-          break;
+          // A tail chunk may arrive right at the boundary; yield once so a
+          // late `_bufferSentenceAudio` can enqueue before we exit.
+          await Future<void>.delayed(Duration.zero);
+          if (chunks.isEmpty) {
+            break;
+          }
         }
         final Uint8List chunk = chunks.removeAt(0);
         _sentencePlaybackBytes -= chunk.length;
@@ -1190,6 +1200,13 @@ class ConversationController extends ChangeNotifier {
       }
     } finally {
       _sentencePlaybackDraining[side] = false;
+    }
+    // Re-arm for a tail chunk that landed during the exit window.
+    if (!_disposed &&
+        !_playbackFailureReported &&
+        _sentencePlaybackFinalized[side] == true &&
+        _sentencePlaybackChunks[side]!.isNotEmpty) {
+      unawaited(_drainSentencePlayback(side));
     }
   }
 

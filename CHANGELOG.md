@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.38.0] - 2026-08-14
+
+### Fixed
+
+- 逐句翻译译音卡顿：松开按钮后，模型仍在流式输出的尾部译音块此前直接
+  无节流地塞进 Dart 播放链（最长一次排队近 6 秒），与缓冲播放并发导致
+  原生队列补给出现间隙、播放卡顿。现在所有逐句译音（松手前缓冲 + 松手
+  后尾音）统一走同一个串行消费队列，由原生背压自然限速，不再堆积在
+  Dart 链上。
+
+### Tests
+
+- 128 Flutter tests pass; Android host tests and lint pass.
+
 ## [0.37.0] - 2026-08-14
 
 ### Changed
