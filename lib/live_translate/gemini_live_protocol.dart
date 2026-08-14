@@ -41,11 +41,13 @@ class GeminiLiveProtocol {
       // setup level. The SDK config flattens these fields the same way.
       'inputAudioTranscription': <String, Object?>{},
       'outputAudioTranscription': <String, Object?>{},
-      // Shorter than the server default: end-of-speech is committed after
-      // half a second of silence, which reduces turn-finalization latency.
+      // The server's automatic VAD ends a turn after this much input silence.
+      // It must not be shorter than the client-side speech-gate tail: the
+      // server would otherwise finalize while the user is still mid-sentence
+      // and cut the last words of the translation off.
       'realtimeInputConfig': <String, Object?>{
         'automaticActivityDetection': <String, Object?>{
-          'silenceDurationMs': 500,
+          'silenceDurationMs': 1000,
         },
       },
       'contextWindowCompression': compression,

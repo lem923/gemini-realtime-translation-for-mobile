@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.37.0] - 2026-08-14
+
+### Changed
+
+- 同声传译与讲座模式改为纯连续流式：说话结束不再发送 `audioStreamEnd`
+  回合边界（此前 VAD 检测到 1 秒静音就强制模型收尾，最后几个单词被截断）。
+  回合定稿交给服务端自动 VAD。
+- 服务端自动 VAD 静音窗口从 500 ms 延长到 1000 ms，与客户端语音门控
+  一致：服务端不再在用户话语中途抢先结束回合。
+
+### Fixed
+
+- 停止会话与回放译音的收尾现在等待 AudioTrack 内部缓冲排空后才释放
+  播放器，回放（点击播放译文）不再丢失尾部。
+- 停止收尾会持续接收模型尾音直到回合完成（最多 15 秒）而不是固定
+  2 秒，模型仍在流式输出的长翻译不再被截断。
+
+### Tests
+
+- 127 Flutter tests pass; Android host tests and lint pass.
+
 ## [0.36.0] - 2026-08-14
 
 ### Fixed

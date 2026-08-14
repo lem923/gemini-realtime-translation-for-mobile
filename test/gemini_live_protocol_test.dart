@@ -25,7 +25,7 @@ void main() {
       'slidingWindow': <String, Object?>{},
     });
     expect(setup['realtimeInputConfig'], <String, Object?>{
-      'automaticActivityDetection': <String, Object?>{'silenceDurationMs': 500},
+      'automaticActivityDetection': <String, Object?>{'silenceDurationMs': 1000},
     });
     expect(generation, isNot(contains('inputAudioTranscription')));
     expect(generation, isNot(contains('outputAudioTranscription')));

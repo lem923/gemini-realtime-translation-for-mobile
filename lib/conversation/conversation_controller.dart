@@ -61,6 +61,8 @@ class ConversationController extends ChangeNotifier {
   final Duration cleanupTimeout;
   final Duration tailGraceDuration;
   bool _tailGraceActive = false;
+  bool _tailTurnComplete = false;
+  int _tailLastAudioMicros = 0;
   final Map<SpeakerSide, LiveTranslationSession> _sessions =
       <SpeakerSide, LiveTranslationSession>{};
   SpeechActivityDetector _speechDetector = SpeechActivityDetector();
@@ -715,6 +717,11 @@ class ConversationController extends ChangeNotifier {
         // accept only the audio tail and the turn completion.
         if (_tailGraceActive &&
             (event is LiveAudioChunk || event is LiveTurnComplete)) {
+          if (event is LiveAudioChunk) {
+            _tailLastAudioMicros = _monotonicMicros();
+          } else {
+            _tailTurnComplete = true;
+          }
           _handleLiveEvent(side, event);
         }
       });
@@ -745,19 +752,15 @@ class ConversationController extends ChangeNotifier {
     final SpeechGateDecision decision = _speechDetector.add(chunk);
     final int now = _monotonicMicros();
     if (isHeadsetMode) {
-      // Lecture mode: no echo guard (translations play on the headset) and
-      // utterances finalize with a stream end.
+      // Lecture mode: no echo guard (translations play on the headset).
+      // The turn boundary belongs to the server's automatic VAD so the
+      // translation tail streams out completely.
       switch (decision) {
         case SpeechGateDecision.hold:
           _microphoneChunksHeld += 1;
         case SpeechGateDecision.finalize:
           _microphoneChunksHeld += 1;
           _utterancesDetected += 1;
-          try {
-            session!.endAudioStream();
-          } catch (_) {
-            // A broken transport must not prevent the next utterance.
-          }
         case SpeechGateDecision.forward:
           _sendMicrophoneChunk(session!, chunk);
       }
@@ -807,15 +810,11 @@ class ConversationController extends ChangeNotifier {
       case SpeechGateDecision.finalize:
         _microphoneChunksHeld += 1;
         _utterancesDetected += 1;
-        // Every utterance end flushes the server's cached audio with an
-        // explicit turn boundary; without it the server holds the final
-        // translation and the last words never play.
-        try {
-          session!.endAudioStream();
-        } catch (_) {
-          // A broken transport must not prevent the next utterance; the
-          // session state machine reports and reconnects on its own.
-        }
+        // Simultaneous interpretation stays one continuous stream: the
+        // server's automatic VAD finalizes the turn after its own silence
+        // window, and the model then streams the complete translation tail.
+        // A client-side audioStreamEnd would force an early turn boundary
+        // and cut the final words off.
         if (_mode == ConversationMode.sentenceBySentence) {
           _startSentencePlayback(_activeSpeaker);
         }
@@ -842,11 +841,8 @@ class ConversationController extends ChangeNotifier {
       case SpeechGateDecision.finalize:
         _microphoneChunksHeld += 1;
         _utterancesDetected += 1;
-        try {
-          session!.endAudioStream();
-        } catch (_) {
-          // A broken transport must not prevent the next utterance.
-        }
+        // Lecture mode is continuous: the server's automatic VAD owns the
+        // turn boundary, so the full translation tail always streams out.
       case SpeechGateDecision.forward:
         _sendMicrophoneChunk(session!, chunk);
     }
@@ -1797,12 +1793,29 @@ class ConversationController extends ChangeNotifier {
       _handlePlaybackFailure(reason: error.toString());
     } finally {
       if (_isCurrentReplay(generation)) {
-        _replayingTurnId = null;
-        _resetPlaybackTimeline();
         if (releaseWhenComplete) {
+          // The full cached translation must play out before the player is
+          // released; the flush only drops what is left after cancellation.
+          final Duration replayDuration =
+              Duration(
+                microseconds:
+                    audio.length *
+                    Duration.microsecondsPerSecond ~/
+                    (outputSampleRateHz * bytesPerSample),
+              ) +
+              const Duration(seconds: 5);
+          await _drainPendingPlayback(
+            shouldContinue: () =>
+                _isCurrentReplay(generation) &&
+                !_playbackFailureReported &&
+                !_disposed,
+            hardCap: replayDuration,
+          );
           await _flushPlayback();
           await _releasePlayback();
         }
+        _replayingTurnId = null;
+        _resetPlaybackTimeline();
         if (!_disposed) {
           notifyListeners();
         }
@@ -1970,23 +1983,51 @@ class ConversationController extends ChangeNotifier {
     }
   }
 
-  /// Bounded graceful tail: accept the model's final audio for [tailGraceDuration],
-  /// then let the enqueue chain and the native queue play out before teardown.
-  /// Every phase is bounded so an explicit stop always completes.
+  /// Bounded graceful tail: keep accepting the model's final audio until the
+  /// response completes (turn complete, or no audio for [tailGraceDuration]),
+  /// then let the enqueue chain and the native queues plus AudioTrack buffers
+  /// play out before teardown. Every phase is bounded so an explicit stop
+  /// always completes.
   Future<void> _drainPlaybackGracefully() async {
     _tailGraceActive = true;
+    _tailTurnComplete = false;
+    _tailLastAudioMicros = _monotonicMicros();
     try {
-      await Future<void>.delayed(tailGraceDuration);
+      final Stopwatch stopwatch = Stopwatch()..start();
+      while (!_tailTurnComplete && stopwatch.elapsed < _tailGraceCap) {
+        final int sinceLastAudio = _monotonicMicros() - _tailLastAudioMicros;
+        if (sinceLastAudio > tailGraceDuration.inMicroseconds) {
+          break;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      }
     } finally {
       _tailGraceActive = false;
     }
+    await _drainPendingPlayback(hardCap: _tailDrainCap);
+  }
+
+  static const Duration _tailGraceCap = Duration(seconds: 15);
+  static const Duration _tailDrainCap = Duration(seconds: 3);
+  static const Duration _chainSettleTimeout = Duration(seconds: 2);
+
+  /// Waits for the enqueue chain to settle and for every queued plus
+  /// written-but-inaudible byte to play out. Bounded by [hardCap] when set;
+  /// otherwise runs until [shouldContinue] turns false (finite audio).
+  Future<void> _drainPendingPlayback({
+    bool Function()? shouldContinue,
+    Duration? hardCap,
+  }) async {
     try {
-      await _waitForPlayback().timeout(_stopDrainTimeout);
+      await _waitForPlayback().timeout(_chainSettleTimeout);
     } catch (_) {
       // A stuck enqueue chain must not delay the authoritative teardown.
     }
     final Stopwatch stopwatch = Stopwatch()..start();
-    while (stopwatch.elapsed < _stopDrainTimeout) {
+    while (hardCap == null || stopwatch.elapsed < hardCap) {
+      if (shouldContinue != null && !shouldContinue()) {
+        return;
+      }
       try {
         final PcmPlaybackMetrics metrics = await _playback.metrics();
         if (metrics.pendingPlaybackBytes <= 0) {
@@ -1998,8 +2039,6 @@ class ConversationController extends ChangeNotifier {
       await Future<void>.delayed(const Duration(milliseconds: 100));
     }
   }
-
-  static const Duration _stopDrainTimeout = Duration(seconds: 2);
 
   void _terminateConversation(
     String message, {

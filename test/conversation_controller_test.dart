@@ -837,7 +837,7 @@ void main() {
         audioCapture: capture,
         playback: playback,
         headsetCapture: _FakeHeadsetCapture(),
-        tailGraceDuration: Duration.zero,
+        tailGraceDuration: const Duration(milliseconds: 200),
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
               final _FakeLiveSession session = _FakeLiveSession();
@@ -2327,7 +2327,7 @@ void main() {
     },
   );
 
-  test('simultaneous mode finalizes utterances with a stream end', () async {
+  test('simultaneous mode streams continuously without client stream ends', () async {
     final _FakeAudioCapture capture = _FakeAudioCapture();
     final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
     final ConversationController controller = ConversationController(
@@ -2354,7 +2354,9 @@ void main() {
       capture.emit(_silenceChunk());
     }
     await _flushEvents();
-    expect(sessions.first.endAudioStreamCount, 1);
+    // Continuous interpretation: the VAD silence tail must NOT force an
+    // audioStreamEnd turn boundary; the server VAD owns finalization.
+    expect(sessions.first.endAudioStreamCount, 0);
     expect(sessions.first.audio, hasLength(11));
 
     final ConversationDiagnostics diagnostics = await controller
@@ -2363,6 +2365,7 @@ void main() {
     expect(diagnostics.microphoneChunksHeld, 6);
 
     await controller.stopConversation();
+    expect(sessions.first.endAudioStreamCount, 1);
     controller.dispose();
   });
 
@@ -2440,9 +2443,11 @@ void main() {
         capture.emit(_silenceChunk());
       }
       await _flushEvents();
-      expect(sessions.first.endAudioStreamCount, 1);
+      // Lecture mode streams continuously; the server VAD owns the boundary.
+      expect(sessions.first.endAudioStreamCount, 0);
 
       await controller.stopConversation();
+      expect(sessions.first.endAudioStreamCount, 1);
       controller.dispose();
     },
   );
