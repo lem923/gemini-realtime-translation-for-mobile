@@ -206,13 +206,13 @@ class _ModeSelector extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ColorScheme colors = Theme.of(context).colorScheme;
-    final bool headsetMode = controller.mode == ConversationMode.headsetSplit;
-    final String hint = headsetMode
-        ? controller.headsetState != HeadsetCaptureState.available
-              ? '耳机分离：需要连接带麦克风的耳机（机主戴耳机，对方看屏幕）'
-              : controller.headsetSpeakerUnavailable
-              ? '耳机分离：本机连接耳机时无法用手机扬声器播放，机主的译文请对方阅读屏幕'
-              : '耳机分离：机主（左）用耳机麦说话、译文播至手机扬声器；对方（右）用手机麦说话、译文播至耳机，自动切换方向'
+    final bool lectureMode = controller.mode == ConversationMode.lecture;
+    final String hint = lectureMode
+        ? controller.lectureChannel == LectureInputChannel.headsetMic
+              ? controller.headsetState != HeadsetCaptureState.available
+                    ? '讲座模式：选择了耳机麦克风，但未检测到带麦克风的耳机'
+                    : '讲座模式：耳机麦收音，译文实时播到耳机（不使用手机扬声器）'
+              : '讲座模式：手机麦收音，译文实时播到耳机（不使用手机扬声器）'
         : controller.mode == ConversationMode.simultaneous
         ? '同声传译：麦克风在译文播放时保持开启，适合耳机使用'
         : '逐句翻译：说完一句，听完译文，再讲下一句';
@@ -233,9 +233,9 @@ class _ModeSelector extends StatelessWidget {
                 tooltip: '边说边听，译文随讲随播，建议佩戴耳机',
               ),
               ButtonSegment<ConversationMode>(
-                value: ConversationMode.headsetSplit,
-                label: Text('耳机分离'),
-                tooltip: '耳机麦克风与手机麦克风分侧采集，自动切换方向',
+                value: ConversationMode.lecture,
+                label: Text('讲座模式'),
+                tooltip: '选择来源与译文语言和麦克风通道，译文实时播到耳机',
               ),
             ],
             selected: <ConversationMode>{controller.mode},
@@ -466,6 +466,9 @@ class _LanguagePair extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (controller.isHeadsetMode) {
+      return _LectureConfig(controller: controller);
+    }
     return Row(
       children: <Widget>[
         Expanded(
@@ -496,6 +499,171 @@ class _LanguagePair extends StatelessWidget {
             onLanguage: () => _pickLanguage(context, controller, SpeakerSide.b),
             badge: controller.isHeadsetMode ? '对方' : 'B',
             semanticName: controller.isHeadsetMode ? '对方' : '讲话人 B',
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _LectureConfig extends StatelessWidget {
+  const _LectureConfig({required this.controller});
+
+  final ConversationController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme colors = Theme.of(context).colorScheme;
+    final Color accent = colors.primary;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: colors.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: colors.outlineVariant, width: 1),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Text(
+            '讲座模式',
+            style: TextStyle(fontWeight: FontWeight.w800, color: accent),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: _LectureLanguageChip(
+                  label: '来源语言',
+                  language: controller.languageA,
+                  onTap: () =>
+                      _pickLanguage(context, controller, SpeakerSide.a),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: Icon(
+                  Icons.arrow_forward_rounded,
+                  color: colors.onSurfaceVariant,
+                ),
+              ),
+              Expanded(
+                child: _LectureLanguageChip(
+                  label: '译文语言',
+                  language: controller.languageB,
+                  onTap: () =>
+                      _pickLanguage(context, controller, SpeakerSide.b),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          SegmentedButton<LectureInputChannel>(
+            segments: const <ButtonSegment<LectureInputChannel>>[
+              ButtonSegment<LectureInputChannel>(
+                value: LectureInputChannel.phoneMic,
+                label: Text('手机麦克风'),
+              ),
+              ButtonSegment<LectureInputChannel>(
+                value: LectureInputChannel.headsetMic,
+                label: Text('耳机麦克风'),
+              ),
+            ],
+            selected: <LectureInputChannel>{controller.lectureChannel},
+            onSelectionChanged: (Set<LectureInputChannel> selection) {
+              controller.setLectureChannel(selection.first);
+            },
+            showSelectedIcon: false,
+            style: ButtonStyle(
+              tapTargetSize: MaterialTapTargetSize.padded,
+              minimumSize: const WidgetStatePropertyAll<Size>(Size(0, 48)),
+              textStyle: WidgetStatePropertyAll<TextStyle>(
+                TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: colors.onSurface,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 9),
+          Text(
+            '选定的麦克风收到${controller.languageA.name}语音时，译文将实时播到你的耳机（不使用手机扬声器）。',
+            style: TextStyle(
+              fontSize: 12,
+              color: colors.onSurfaceVariant,
+              height: 1.4,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LectureLanguageChip extends StatelessWidget {
+  const _LectureLanguageChip({
+    required this.label,
+    required this.language,
+    required this.onTap,
+  });
+
+  final String label;
+  final TranslationLanguage language;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme colors = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            color: colors.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(height: 6),
+        Semantics(
+          button: true,
+          onTap: onTap,
+          label: '$label ${language.name}',
+          excludeSemantics: true,
+          child: InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(10),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 48),
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 3,
+                ),
+                decoration: BoxDecoration(
+                  color: colors.surfaceContainerHigh.withValues(alpha: 0.55),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: colors.outlineVariant, width: 1),
+                ),
+                child: Row(
+                  children: <Widget>[
+                    Text(language.flag, style: const TextStyle(fontSize: 18)),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        language.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                    const Icon(Icons.expand_more_rounded, size: 18),
+                  ],
+                ),
+              ),
+            ),
           ),
         ),
       ],

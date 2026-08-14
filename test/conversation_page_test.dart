@@ -137,6 +137,41 @@ void main() {
     controller.dispose();
   });
 
+  testWidgets('lecture mode shows config panel and channel selector', (
+    WidgetTester tester,
+  ) async {
+    final ConversationController controller = ConversationController(
+      keyStore: _StoredKeyStore(),
+      audioCapture: _NoopAudioCapture(),
+      playback: _NoopPlayback(),
+      headsetCapture: _NoopHeadsetCapture(),
+      sessionFactory:
+          ({required String apiKey, required String targetLanguageCode}) =>
+              _NoopLiveSession(),
+    );
+    await controller.initialize();
+
+    await tester.pumpWidget(
+      MaterialApp(home: ConversationPage(controller: controller)),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('讲座模式'));
+    await tester.pumpAndSettle();
+
+    expect(controller.mode, ConversationMode.lecture);
+    expect(find.text('来源语言'), findsOneWidget);
+    expect(find.text('译文语言'), findsOneWidget);
+    expect(find.text('手机麦克风'), findsOneWidget);
+    expect(find.text('耳机麦克风'), findsOneWidget);
+    expect(find.textContaining('实时播到你的耳机'), findsOneWidget);
+
+    await tester.tap(find.text('耳机麦克风'));
+    await tester.pumpAndSettle();
+    expect(controller.lectureChannel, LectureInputChannel.headsetMic);
+
+    controller.dispose();
+  });
+
   testWidgets('shows connecting state in face-to-face mode', (
     WidgetTester tester,
   ) async {

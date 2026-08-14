@@ -463,6 +463,12 @@ void main() {
         ..emit(LiveAudioChunk(Uint8List.fromList(<int>[5, 6, 7, 8])))
         ..emit(const LiveTurnComplete());
       await _flushEvents();
+      capture.emit(_speechChunk());
+      capture.emit(_speechChunk());
+      for (int i = 0; i < 15; i += 1) {
+        capture.emit(_silenceChunk());
+      }
+      await _flushEvents();
       expect(playback.enqueued, <List<int>>[
         <int>[5, 6, 7, 8],
       ]);
@@ -1233,10 +1239,11 @@ void main() {
     'fresh translated audio interrupts replay without dropping output',
     () async {
       final _FakePlayback playback = _FakePlayback();
+      final _FakeAudioCapture capture = _FakeAudioCapture();
       final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
       final ConversationController controller = ConversationController(
         keyStore: _MemoryKeyStore('stored-key'),
-        audioCapture: _FakeAudioCapture(),
+        audioCapture: capture,
         playback: playback,
         headsetCapture: _FakeHeadsetCapture(),
         sessionFactory:
@@ -1265,6 +1272,12 @@ void main() {
       sessions.first.emit(LiveAudioChunk(freshAudio));
       await _flushEvents();
       await replay;
+      capture.emit(_speechChunk());
+      capture.emit(_speechChunk());
+      for (int i = 0; i < 15; i += 1) {
+        capture.emit(_silenceChunk());
+      }
+      await _flushEvents();
 
       expect(controller.replayingTurnId, isNull);
       expect(playback.enqueued.last, freshAudio);
@@ -2199,7 +2212,7 @@ void main() {
   });
 
   test(
-    'headset mode fails closed when no headset microphone is present',
+    'lecture mode with headset mic fails closed without a headset',
     () async {
       final _FakeHeadsetCapture headset = _FakeHeadsetCapture()
         ..stateValue = HeadsetCaptureState.unavailable;
@@ -2214,29 +2227,31 @@ void main() {
       );
 
       await controller.initialize();
-      controller.setMode(ConversationMode.headsetSplit);
+      controller.setMode(ConversationMode.lecture);
+      controller.setLectureChannel(LectureInputChannel.headsetMic);
       await _flushEvents();
       await controller.startConversation();
       await _flushEvents();
 
       expect(controller.phase, ConversationPhase.failed);
-      expect(controller.errorMessage, contains('未检测到耳机'));
+      expect(controller.errorMessage, contains('未检测到带麦克风的耳机'));
       expect(headset.started, isFalse);
       controller.dispose();
     },
   );
 
   test(
-    'headset mode auto-switches direction between the two microphones',
+    'lecture mode routes the selected channel to the fixed source session',
     () async {
       final _FakeAudioCapture capture = _FakeAudioCapture();
       final _FakeHeadsetCapture headset = _FakeHeadsetCapture()
         ..stateValue = HeadsetCaptureState.available;
+      final _FakePlayback playback = _FakePlayback();
       final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
       final ConversationController controller = ConversationController(
         keyStore: _MemoryKeyStore('stored-key'),
         audioCapture: capture,
-        playback: _FakePlayback(),
+        playback: playback,
         headsetCapture: headset,
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
@@ -2247,39 +2262,37 @@ void main() {
       );
 
       await controller.initialize();
-      controller.setMode(ConversationMode.headsetSplit);
+      controller.setMode(ConversationMode.lecture);
+      controller.setLectureChannel(LectureInputChannel.phoneMic);
       await _flushEvents();
       await controller.startConversation();
       await _flushEvents();
-      expect(headset.started, isTrue);
+
+      expect(controller.activeSpeaker, SpeakerSide.a);
+      expect(sessions, hasLength(1));
+      expect(headset.started, isFalse);
 
       capture.emit(_speechChunk());
-      await _flushEvents();
-      expect(controller.activeSpeaker, SpeakerSide.a);
-      expect(sessions[1].audio, isEmpty);
-
       capture.emit(_speechChunk());
       await _flushEvents();
-      expect(controller.activeSpeaker, SpeakerSide.b);
-      expect(sessions[1].audio, hasLength(1));
-      expect(sessions[0].endAudioStreamCount, 1);
+      expect(sessions.first.audio, hasLength(2));
 
-      headset.emit(_speechChunk());
-      headset.emit(_speechChunk());
+      sessions.first.emit(LiveAudioChunk(Uint8List(4800)));
       await _flushEvents();
-      expect(controller.activeSpeaker, SpeakerSide.a);
-      expect(sessions[0].audio, hasLength(1));
+      expect(playback.operations, contains('enqueueTrack:headset'));
 
-      final ConversationDiagnostics diagnostics = await controller
-          .collectDiagnostics();
-      expect(diagnostics.autoDirectionSwitches, 2);
+      for (int i = 0; i < 15; i += 1) {
+        capture.emit(_silenceChunk());
+      }
+      await _flushEvents();
+      expect(sessions.first.endAudioStreamCount, 1);
 
       await controller.stopConversation();
       controller.dispose();
     },
   );
 
-  test('headset mode routes each side to its own playback track', () async {
+  test('lecture mode headset mic channel starts headset capture', () async {
     final _FakeAudioCapture capture = _FakeAudioCapture();
     final _FakeHeadsetCapture headset = _FakeHeadsetCapture()
       ..stateValue = HeadsetCaptureState.available;
@@ -2299,20 +2312,19 @@ void main() {
     );
 
     await controller.initialize();
-    controller.setMode(ConversationMode.headsetSplit);
+    controller.setMode(ConversationMode.lecture);
+    controller.setLectureChannel(LectureInputChannel.headsetMic);
     await _flushEvents();
     await controller.startConversation();
     await _flushEvents();
 
-    sessions[0].emit(LiveAudioChunk(Uint8List(4800)));
+    expect(headset.started, isTrue);
+    headset.emit(_speechChunk());
+    headset.emit(_speechChunk());
     await _flushEvents();
-    expect(playback.operations, contains('enqueueTrack:phoneSpeaker'));
+    expect(sessions.first.audio, hasLength(2));
 
-    capture.emit(_speechChunk());
-    capture.emit(_speechChunk());
-    await _flushEvents();
-    expect(controller.activeSpeaker, SpeakerSide.b);
-    sessions[1].emit(LiveAudioChunk(Uint8List(4800)));
+    sessions.first.emit(LiveAudioChunk(Uint8List(4800)));
     await _flushEvents();
     expect(playback.operations, contains('enqueueTrack:headset'));
 
@@ -2536,6 +2548,10 @@ void main() {
       );
     nowMicros = 1090000;
     capture.emit(_speechChunk());
+    for (int i = 0; i < 15; i += 1) {
+      capture.emit(_silenceChunk());
+    }
+    await _flushEvents();
     sessions.first
       ..emit(const LiveTurnComplete())
       ..emit(const LivePhaseChanged(LiveSessionPhase.reconnecting))
@@ -2560,10 +2576,10 @@ void main() {
         .collectDiagnostics();
     expect(diagnostics.sessionDurationMilliseconds, 200);
     expect(diagnostics.mode, ConversationMode.sentenceBySentence);
-    expect(diagnostics.microphoneChunksSent, 2);
+    expect(diagnostics.microphoneChunksSent, 16);
     expect(diagnostics.microphoneChunksSuppressed, 0);
-    expect(diagnostics.microphoneChunksHeld, 0);
-    expect(diagnostics.utterancesDetected, 0);
+    expect(diagnostics.microphoneChunksHeld, 1);
+    expect(diagnostics.utterancesDetected, 1);
     expect(diagnostics.bargeIns, 0);
     expect(diagnostics.outputAudioChunks, 1);
     expect(diagnostics.outputAudioBytes, 4800);

@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-08-14
+
+### Changed
+
+- Playback no longer stutters: the native lanes now apply real backpressure
+  (enqueue blocks until the audio is consumed instead of dropping chunks or
+  pacing from Dart), so every mode streams smoothly, including replay.
+- 耳机分离 mode was replaced by 讲座模式 (lecture mode): the user picks the
+  source language, the target language, and the microphone channel (built-in
+  or headset). Speech on the selected channel is translated into the
+  user's headset in real time; the phone speaker is not used. The UI shows a
+  dedicated config panel instead of the A/B speaker cards.
+- 逐句翻译 playback now starts only at the client's own utterance
+  finalization, not at the server's earlier turn-complete, so buffered
+  translations no longer leak out while the speaker continues.
+
+### Tests
+
+- 124 Flutter tests pass, including lecture routing, channel selection, and
+  buffered-playback regressions; Android host tests and lint pass.
+
 ## [0.24.0] - 2026-08-14
 
 ### Changed

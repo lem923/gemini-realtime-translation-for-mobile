@@ -6,17 +6,18 @@ enum SpeakerSide { a, b }
 
 /// Operating mode for the microphone/playback pipeline.
 ///
-/// [sentenceBySentence] keeps the classic half-duplex flow: the microphone is
-/// protected from the speaker while a translation plays, and each utterance
-/// ends with an explicit turn boundary. [simultaneous] keeps the microphone
-/// open while translated audio plays so interpretation streams continuously,
-/// like the AI Studio live playground; it relies on device echo cancellation
-/// and works best with earpiece or headset output. [headsetSplit] requires a
-/// headset with a microphone: the headset mic captures the wearer (speaker A)
-/// while the built-in mic captures the other person (speaker B); direction is
-/// detected automatically, A's translation plays on the phone speaker and B's
-/// translation plays on the headset.
-enum ConversationMode { sentenceBySentence, simultaneous, headsetSplit }
+/// [sentenceBySentence] buffers translated audio while the speaker is talking
+/// and plays it after the sentence finalizes. [simultaneous] keeps the
+/// microphone open and streams interpretation continuously, like the AI
+/// Studio live playground. [lecture] is a one-direction listening mode: the
+/// user picks the source language, the target language, and the microphone
+/// channel (built-in or headset); speech on that channel is translated into
+/// the user's headset in real time. The phone speaker is not used in lecture
+/// mode.
+enum ConversationMode { sentenceBySentence, simultaneous, lecture }
+
+/// Microphone channel used by [ConversationMode.lecture].
+enum LectureInputChannel { phoneMic, headsetMic }
 
 enum ConversationPhase {
   needsKey,
