@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.2] - 2026-08-14
+
+### Fixed
+
+- Fixed the 耳机分离 crash identified by the on-device crash log: the headset
+  capture thread emitted EventChannel events from a background thread, which
+  the Flutter embedding rejects with a UiThread RuntimeException. Events are
+  now dispatched on the platform main thread.
+
+### Tests
+
+- 123 Flutter tests pass; Android host tests and lint pass.
+
 ## [0.23.1] - 2026-08-14
 
 ### Fixed

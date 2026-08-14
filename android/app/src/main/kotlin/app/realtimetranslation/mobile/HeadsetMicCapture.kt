@@ -8,8 +8,9 @@ import android.media.AudioDeviceInfo
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
+import android.os.Handler
+import android.os.Looper
 import io.flutter.plugin.common.EventChannel
-import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 
@@ -18,7 +19,9 @@ import kotlin.concurrent.thread
  * independently of the built-in microphone, for headset-split mode.
  *
  * Fails closed: [isAvailable] reports false unless a headset microphone device
- * exists, and [start] throws when the recorder cannot bind to one.
+ * exists, and [start] throws when the recorder cannot bind to one. EventChannel
+ * events are always dispatched on the platform main thread, as required by the
+ * Flutter embedding.
  */
 internal class HeadsetMicCapture(
     private val context: Context,
@@ -28,6 +31,7 @@ internal class HeadsetMicCapture(
     private val channelConfig = AudioFormat.CHANNEL_IN_MONO
     private val encoding = AudioFormat.ENCODING_PCM_16BIT
     private val chunkBytes = sampleRate * 2 / 10
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     @Volatile
     private var eventSink: EventChannel.EventSink? = null
@@ -37,6 +41,18 @@ internal class HeadsetMicCapture(
 
     fun setEventSink(sink: EventChannel.EventSink?) {
         eventSink = sink
+    }
+
+    private fun emitChunk(bytes: ByteArray) {
+        mainHandler.post {
+            eventSink?.success(bytes)
+        }
+    }
+
+    private fun emitError(code: String, message: String) {
+        mainHandler.post {
+            eventSink?.error(code, message, null)
+        }
     }
 
     fun isAvailable(): Boolean {
@@ -121,10 +137,9 @@ internal class HeadsetMicCapture(
             }
             if (read <= 0) {
                 if (read < 0) {
-                    eventSink?.error(
+                    emitError(
                         "headset_read_failure",
                         "Headset microphone read failed: $read",
-                        null,
                     )
                     active.set(false)
                     break
@@ -137,7 +152,7 @@ internal class HeadsetMicCapture(
                 bytes[i * 2] = (sample and 0xff).toByte()
                 bytes[i * 2 + 1] = ((sample shr 8) and 0xff).toByte()
             }
-            eventSink?.success(bytes)
+            emitChunk(bytes)
         }
     }
 
