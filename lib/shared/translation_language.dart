@@ -1,6 +1,3 @@
-import 'package:flutter/foundation.dart';
-
-@immutable
 class TranslationLanguage {
   const TranslationLanguage({
     required this.code,

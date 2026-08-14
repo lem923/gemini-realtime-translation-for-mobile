@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-08-14
+
+### Changed
+
+- 逐句翻译 ASR now uses the audio-native Gemini 3.1 Flash Live model
+  (`gemini-3.1-flash-live-preview`) over the Live API: flash-class cost and
+  verified Chinese transcription quality. The correction+translation step
+  uses `gemini-flash-lite-latest`. The transcription settles dynamically
+  (no fixed wait), and the full pipeline (ASR → correct+translate → TTS)
+  runs in about 11 s for a sentence.
+- Flash-family models still reject inline audio via REST generateContent, so
+  the audio path stays on the Live API; this is documented in the probe tools.
+
+### Tests
+
+- 124 Flutter tests pass; Android host tests and lint pass. New probe tools:
+  `tool/live_asr_probe.dart` and `tool/sentence_pipeline_probe.dart` (real-API
+  verification of the exact pipeline used in the app).
+
 ## [0.26.0] - 2026-08-14
 
 ### Changed

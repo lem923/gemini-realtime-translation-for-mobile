@@ -18,6 +18,8 @@ class GeminiLiveProtocol {
     String? resumptionHandle,
     int? slidingWindowTargetTokens,
     int? compressionTriggerTokens,
+    String model = GeminiLiveProtocol.model,
+    bool translationEnabled = true,
   }) {
     final Map<String, Object?> compression = <String, Object?>{
       'slidingWindow': <String, Object?>{
@@ -29,10 +31,11 @@ class GeminiLiveProtocol {
       'model': 'models/$model',
       'generationConfig': <String, Object?>{
         'responseModalities': <String>['AUDIO'],
-        'translationConfig': <String, Object?>{
-          'targetLanguageCode': targetLanguageCode,
-          'echoTargetLanguage': false,
-        },
+        if (translationEnabled)
+          'translationConfig': <String, Object?>{
+            'targetLanguageCode': targetLanguageCode,
+            'echoTargetLanguage': false,
+          },
       },
       // The raw v1beta endpoint currently accepts transcription settings at
       // setup level. The SDK config flattens these fields the same way.

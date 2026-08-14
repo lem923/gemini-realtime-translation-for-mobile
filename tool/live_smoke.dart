@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:realtime_translation/live_translate/gemini_live_protocol.dart';
 import 'package:realtime_translation/live_translate/live_event.dart';
 import 'package:realtime_translation/live_translate/live_translation_session.dart';
 
@@ -31,6 +32,11 @@ Future<void> main(List<String> arguments) async {
   final GeminiLiveSession session = GeminiLiveSession(
     apiKey: apiKey,
     targetLanguageCode: target,
+    model: Platform.environment['LIVE_TEST_MODEL']?.trim().isNotEmpty == true
+        ? Platform.environment['LIVE_TEST_MODEL']!.trim()
+        : GeminiLiveProtocol.model,
+    translationEnabled:
+        (Platform.environment['LIVE_TEST_TRANSLATION'] ?? 'true') == 'true',
   );
   final Completer<void> completed = Completer<void>();
   int inputTranscriptCharacters = 0;

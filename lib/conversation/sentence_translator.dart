@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import '../live_translate/live_event.dart';
+import '../live_translate/live_translation_session.dart';
 import '../shared/translation_language.dart';
 
 /// One completed sentence turn used as context for the next correction.
@@ -47,10 +49,14 @@ abstract interface class SentenceTranslator {
 
 class RestSentenceTranslator implements SentenceTranslator {
   RestSentenceTranslator({
-    this.asrModel = 'gemini-2.5-pro',
-    this.textModel = 'gemini-2.5-flash-lite',
+    // The flash live family is audio-native and cheap; the preview suffix is
+    // required on current keys. Text correction uses the latest lite alias.
+    this.asrModel = 'gemini-3.1-flash-live-preview',
+    this.textModel = 'gemini-flash-lite-latest',
     this.timeout = const Duration(seconds: 60),
   });
+
+  static const int _transcriptionSettleMicros = 1500000;
 
   final String asrModel;
   final String textModel;
@@ -79,27 +85,66 @@ class RestSentenceTranslator implements SentenceTranslator {
     );
   }
 
+  /// Transcribes the recorded PCM with the audio-native flash live model.
+  /// The session is opened per turn (1-2 s), the buffered audio is streamed at
+  /// real-time pace, and the growing input transcription is accumulated.
   Future<String> _transcribe({
     required String apiKey,
     required Uint8List pcm,
   }) async {
-    final Map<String, Object?> body = <String, Object?>{
-      'contents': <Object?>[
-        <String, Object?>{
-          'parts': <Object?>[
-            <String, Object?>{
-              'inlineData': <String, Object?>{
-                'mimeType': 'audio/wav',
-                'data': base64Encode(_pcmToWav(pcm)),
-              },
-            },
-            <String, Object?>{'text': '逐字转写这段语音，只输出转写文字。'},
-          ],
-        },
-      ],
-    };
-    final String raw = await _post(apiKey, '$asrModel:generateContent', body);
-    return _extractText(raw).trim();
+    final GeminiLiveSession session = GeminiLiveSession(
+      apiKey: apiKey,
+      targetLanguageCode: 'en',
+      model: asrModel,
+      translationEnabled: false,
+    );
+    final StringBuffer transcript = StringBuffer();
+    String? failure;
+    int lastGrowthMicros = 0;
+    final StreamSubscription<LiveEvent> subscription = session.events.listen((
+      LiveEvent event,
+    ) {
+      switch (event) {
+        case LiveInputTranscript(:final String text):
+          transcript.write(text);
+          lastGrowthMicros = DateTime.now().microsecondsSinceEpoch;
+        case LiveSessionFailure(:final String userMessage):
+          failure = userMessage;
+        default:
+          break;
+      }
+    });
+    try {
+      await session.connect().timeout(timeout);
+      const int chunkBytes = 3200;
+      for (int offset = 0; offset < pcm.length; offset += chunkBytes) {
+        final int end = (offset + chunkBytes).clamp(0, pcm.length);
+        session.sendAudio(Uint8List.fromList(pcm.sublist(offset, end)));
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      }
+      session.endAudioStream();
+      // The transcription settles quickly after the stream end; stop once it
+      // has not grown for a moment instead of waiting a fixed window.
+      for (int i = 0; i < 40; i += 1) {
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+        final int sinceGrowth =
+            DateTime.now().microsecondsSinceEpoch - lastGrowthMicros;
+        if (transcript.isNotEmpty && sinceGrowth > _transcriptionSettleMicros) {
+          break;
+        }
+      }
+      final String text = transcript.toString().trim();
+      if (failure != null && text.isEmpty) {
+        throw SentencePipelineException(failure!);
+      }
+      if (text.isEmpty) {
+        throw const SentencePipelineException('语音识别没有返回结果');
+      }
+      return text;
+    } finally {
+      await subscription.cancel();
+      await session.close();
+    }
   }
 
   Future<String> _correctAndTranslate({
@@ -211,26 +256,6 @@ class RestSentenceTranslator implements SentenceTranslator {
     } on FormatException {
       return '';
     }
-  }
-
-  static Uint8List _pcmToWav(Uint8List pcm) {
-    final Uint8List wav = Uint8List(44 + pcm.length);
-    final ByteData header = ByteData.sublistView(wav);
-    header.setUint32(0, 0x52494646, Endian.little); // RIFF
-    header.setUint32(4, 36 + pcm.length, Endian.little);
-    header.setUint32(8, 0x57415645, Endian.little); // WAVE
-    header.setUint32(12, 0x666d7420, Endian.little); // fmt
-    header.setUint32(16, 16, Endian.little);
-    header.setUint16(20, 1, Endian.little);
-    header.setUint16(22, 1, Endian.little);
-    header.setUint32(24, 16000, Endian.little);
-    header.setUint32(28, 16000 * 2, Endian.little);
-    header.setUint16(32, 2, Endian.little);
-    header.setUint16(34, 16, Endian.little);
-    header.setUint32(36, 0x64617461, Endian.little); // data
-    header.setUint32(40, pcm.length, Endian.little);
-    wav.setRange(44, wav.length, pcm);
-    return wav;
   }
 }
 
