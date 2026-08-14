@@ -108,6 +108,7 @@ class ConversationController extends ChangeNotifier {
   bool _audioMuted = false;
   bool _disposed = false;
   bool _playbackFailureReported = false;
+  int _playbackAutoRecoveries = 0;
   bool _playbackConfigured = false;
   bool _microphonePermissionGrantedOnce = false;
   AudioOutputRoute _activeOutputRoute = AudioOutputRoute.unknown;
@@ -1435,6 +1436,32 @@ class ConversationController extends ChangeNotifier {
     unawaited(_releasePlayback());
     _errorMessage = '译音播放失败，文字翻译仍可继续';
     notifyListeners();
+    // One automatic recovery attempt: transient native failures (route or
+    // HAL state) are replayed with a fresh configuration shortly after.
+    if (_playbackAutoRecoveries < 1) {
+      _playbackAutoRecoveries += 1;
+      unawaited(_recoverPlaybackOnce());
+    }
+  }
+
+  Future<void> _recoverPlaybackOnce() async {
+    await Future<void>.delayed(const Duration(milliseconds: 800));
+    if (_disposed || !_playbackFailureReported) {
+      return;
+    }
+    _playbackFailureReported = false;
+    try {
+      await _ensurePlaybackConfigured();
+      if (_disposed || _playbackFailureReported) {
+        return;
+      }
+      _audioMuted = false;
+      _errorMessage = null;
+      notifyListeners();
+    } catch (_) {
+      // The failure is persistent; stay in text-only mode with the message.
+      _playbackFailureReported = true;
+    }
   }
 
   void _handlePlaybackEvent(PcmPlaybackEvent event) {
@@ -2332,6 +2359,7 @@ class ConversationController extends ChangeNotifier {
     _microphoneChunksHeld = 0;
     _utterancesDetected = 0;
     _bargeIns = 0;
+    _playbackAutoRecoveries = 0;
     _sentenceTurnsCompleted = 0;
     _autoDirectionSwitches = 0;
     _outputAudioChunks = 0;

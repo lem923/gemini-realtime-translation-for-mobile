@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.31.0] - 2026-08-14
+
+### Fixed
+
+- Playback failure on real devices (同声传译/讲座): the native lanes now
+  rebuild a fresh AudioTrack and retry the chunk once when the same-track
+  retry fails, with a larger track buffer for HAL headroom. Dart additionally
+  attempts one automatic playback reconfiguration after a failure instead of
+  staying text-only.
+
+### Tests
+
+- 124 Flutter tests pass; Android host tests and lint pass.
+
 ## [0.30.0] - 2026-08-14
 
 ### Changed

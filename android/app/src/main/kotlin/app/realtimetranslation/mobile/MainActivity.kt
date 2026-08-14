@@ -415,7 +415,7 @@ private class PcmStreamPlayer(
         val channelMask = AudioFormat.CHANNEL_OUT_MONO
         val encoding = AudioFormat.ENCODING_PCM_16BIT
         val minimum = AudioTrack.getMinBufferSize(sampleRate, channelMask, encoding)
-        val bufferBytes = max(minimum, sampleRate / 2)
+        val bufferBytes = max(minimum, sampleRate * 4 / 5)
         val attributes = AudioAttributes.Builder()
             .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
             .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
@@ -514,6 +514,32 @@ private class PcmStreamPlayer(
                             if (retryFailure == null) {
                                 continue
                             }
+                            // Same-track retry failed: rebuild a fresh track
+                            // (transient HAL states can corrupt a track) and
+                            // retry the chunk once on it.
+                            val rebuilt = rebuildMainTrackForRetry(
+                                sampleRate,
+                                run,
+                            )
+                            if (rebuilt != null) {
+                                val rebuildFailure = writeChunkOnTrack(
+                                    rebuilt,
+                                    chunk,
+                                    run,
+                                )
+                                if (rebuildFailure == null) {
+                                    continue
+                                }
+                                run.stop()
+                                if (playbackRun === run) {
+                                    onPlaybackFailure(
+                                        rebuildFailure.copy(
+                                            clientGeneration = run.clientGeneration,
+                                        ),
+                                    )
+                                }
+                                break
+                            }
                             run.stop()
                             if (playbackRun === run) {
                                 onPlaybackFailure(
@@ -584,6 +610,106 @@ private class PcmStreamPlayer(
             PlaybackWriteOutcome.Completed -> null
             PlaybackWriteOutcome.Cancelled -> null
             is PlaybackWriteOutcome.Failed -> retry.failure
+        }
+    }
+
+    private fun writeChunkOnTrack(
+        track: AudioTrack,
+        chunk: PlaybackChunk,
+        run: PlaybackRunState,
+    ): PlaybackWriteFailure? {
+        val outcome = PlaybackWritePump.write(
+            byteCount = chunk.bytes.size,
+            isActive = {
+                playbackRun === run && run.accepts(chunk) && audioTrack === track
+            },
+            writeNonBlocking = { offset, byteCount ->
+                synchronized(trackOperationLock) {
+                    if (playbackRun !== run ||
+                        !run.accepts(chunk) ||
+                        audioTrack !== track
+                    ) {
+                        0
+                    } else {
+                        track.write(
+                            chunk.bytes,
+                            offset,
+                            byteCount,
+                            AudioTrack.WRITE_NON_BLOCKING,
+                        )
+                    }
+                }
+            },
+            awaitWritable = {
+                Thread.sleep(NON_BLOCKING_RETRY_MILLISECONDS)
+            },
+        )
+        return when (outcome) {
+            PlaybackWriteOutcome.Completed -> null
+            PlaybackWriteOutcome.Cancelled -> null
+            is PlaybackWriteOutcome.Failed -> outcome.failure
+        }
+    }
+
+    private fun rebuildMainTrackForRetry(
+        sampleRate: Int,
+        run: PlaybackRunState,
+    ): AudioTrack? {
+        val rebuilt = try {
+            val channelMask = AudioFormat.CHANNEL_OUT_MONO
+            val encoding = AudioFormat.ENCODING_PCM_16BIT
+            val minimum = AudioTrack.getMinBufferSize(sampleRate, channelMask, encoding)
+            val track = AudioTrack.Builder()
+                .setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build(),
+                )
+                .setAudioFormat(
+                    AudioFormat.Builder()
+                        .setSampleRate(sampleRate)
+                        .setEncoding(encoding)
+                        .setChannelMask(channelMask)
+                        .build(),
+                )
+                .setTransferMode(AudioTrack.MODE_STREAM)
+                .setBufferSizeInBytes(max(minimum, sampleRate * 4 / 5))
+                .build()
+            if (track.state != AudioTrack.STATE_INITIALIZED) {
+                track.release()
+                return null
+            }
+            track
+        } catch (_: Throwable) {
+            null
+        } ?: return null
+        return synchronized(lifecycleLock) {
+            if (playbackRun !== run || !run.active) {
+                rebuilt.release()
+                null
+            } else {
+                val previous = audioTrack
+                audioTrack = rebuilt
+                BestEffortCleanup.run(
+                    {
+                        if (previous?.playState == AudioTrack.PLAYSTATE_PLAYING) {
+                            previous.stop()
+                        }
+                    },
+                    { previous?.flush() },
+                    { previous?.release() },
+                )
+                try {
+                    rebuilt.play()
+                } catch (_: Throwable) {
+                    rebuilt.release()
+                    audioTrack = null
+                    return@synchronized null
+                }
+                updateLastOutputRoute()
+                rebuilt
+            }
         }
     }
 
