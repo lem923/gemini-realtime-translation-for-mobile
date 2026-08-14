@@ -24,6 +24,8 @@ class ConversationDiagnostics {
     required this.reconnectEvents,
     required this.sessionFailures,
     required this.playbackFailures,
+    required this.lastPlaybackFailureReason,
+    required this.lastPlaybackFailurePlatformCode,
     required this.audioInterruptions,
     required this.geminiPromptTokens,
     required this.geminiResponseTokens,
@@ -57,6 +59,8 @@ class ConversationDiagnostics {
   final int reconnectEvents;
   final int sessionFailures;
   final int playbackFailures;
+  final String? lastPlaybackFailureReason;
+  final int? lastPlaybackFailurePlatformCode;
   final int audioInterruptions;
   final int geminiPromptTokens;
   final int geminiResponseTokens;
@@ -91,7 +95,8 @@ class ConversationDiagnostics {
       '方向切换: $directionSwitches',
       '重连事件: $reconnectEvents',
       '会话错误: $sessionFailures',
-      '播放错误: $playbackFailures',
+      '播放错误: $playbackFailures'
+          '${_formatFailureDetails(lastPlaybackFailureReason, lastPlaybackFailurePlatformCode)}',
       '系统音频中断: $audioInterruptions',
       'Gemini Token 输入 / 输出 / 合计: '
           '${geminiUsageAvailable ? '$geminiPromptTokens / $geminiResponseTokens / $geminiTotalTokens' : '未收到'}',
@@ -112,5 +117,16 @@ class ConversationDiagnostics {
       '音频焦点已获得: ${playbackMetrics.audioFocusGranted ? '是' : '否'}',
       '原生指标可用: ${playbackMetricsAvailable ? '是' : '否'}',
     ].join('\n');
+  }
+
+  static String _formatFailureDetails(String? reason, int? platformCode) {
+    if (reason == null && platformCode == null) {
+      return '';
+    }
+    final List<String> parts = <String>[
+      ?reason,
+      if (platformCode != null) 'code=$platformCode',
+    ];
+    return '（最近: ${parts.join(' / ')}）';
   }
 }

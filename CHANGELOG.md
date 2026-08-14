@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.32.0] - 2026-08-14
+
+### Fixed
+
+- 同声传译识别卡顿/逐句定稿失败：麦克风语音门控过严（进入阈值 64 倍噪声底、
+  1.5 s 静音尾）会扣下轻声或语速略慢的整段语音，导致模型只收到残缺音频、
+  回合无法定稿。进入阈值降为噪声底的 16 倍、静音尾缩短为 1 s。
+- 诊断报告现在包含最近一次播放失败的原生原因与错误码，便于真机定位
+  “译音播放失败”的根因，而不是只有失败计数。
+
+### Tests
+
+- 124 Flutter tests pass; Android host tests and lint pass.
+
 ## [0.31.0] - 2026-08-14
 
 ### Fixed

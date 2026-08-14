@@ -145,6 +145,8 @@ class ConversationController extends ChangeNotifier {
   int _reconnectEvents = 0;
   int _sessionFailures = 0;
   int _playbackFailures = 0;
+  String? _lastPlaybackFailureReason;
+  int? _lastPlaybackFailurePlatformCode;
   int _audioInterruptions = 0;
   int _geminiPromptTokens = 0;
   int _geminiResponseTokens = 0;
@@ -1423,12 +1425,17 @@ class ConversationController extends ChangeNotifier {
     _captureBlockedUntilMicros = now;
   }
 
-  void _handlePlaybackFailure() {
+  void _handlePlaybackFailure({
+    String? reason,
+    int? platformCode,
+  }) {
     if (_disposed || _playbackFailureReported) {
       return;
     }
     _playbackFailureReported = true;
     _playbackFailures += 1;
+    _lastPlaybackFailureReason = reason;
+    _lastPlaybackFailurePlatformCode = platformCode;
     _audioMuted = true;
     _invalidatePlaybackOperations();
     _playbackConfigured = false;
@@ -1480,7 +1487,10 @@ class ConversationController extends ChangeNotifier {
       if (event.clientGeneration != _playbackGeneration) {
         return;
       }
-      _handlePlaybackFailure();
+      _handlePlaybackFailure(
+        reason: event.reason,
+        platformCode: event.platformCode,
+      );
       return;
     }
     if (event is! PcmPlaybackInterrupted) {
@@ -2327,6 +2337,8 @@ class ConversationController extends ChangeNotifier {
       reconnectEvents: _reconnectEvents,
       sessionFailures: _sessionFailures,
       playbackFailures: _playbackFailures,
+      lastPlaybackFailureReason: _lastPlaybackFailureReason,
+      lastPlaybackFailurePlatformCode: _lastPlaybackFailurePlatformCode,
       audioInterruptions: _audioInterruptions,
       geminiPromptTokens: _geminiPromptTokens,
       geminiResponseTokens: _geminiResponseTokens,
@@ -2369,6 +2381,8 @@ class ConversationController extends ChangeNotifier {
     _reconnectEvents = 0;
     _sessionFailures = 0;
     _playbackFailures = 0;
+    _lastPlaybackFailureReason = null;
+    _lastPlaybackFailurePlatformCode = null;
     _audioInterruptions = 0;
     _geminiPromptTokens = 0;
     _geminiResponseTokens = 0;

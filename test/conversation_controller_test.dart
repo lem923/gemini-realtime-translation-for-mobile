@@ -1026,6 +1026,16 @@ void main() {
       expect(controller.errorMessage, contains('文字翻译'));
       expect(playback.disposeCount, greaterThanOrEqualTo(1));
 
+      final ConversationDiagnostics failedDiagnostics = await controller
+          .collectDiagnostics();
+      expect(failedDiagnostics.playbackFailures, 1);
+      expect(failedDiagnostics.lastPlaybackFailureReason, 'writeError');
+      expect(failedDiagnostics.lastPlaybackFailurePlatformCode, -6);
+      expect(
+        failedDiagnostics.toRedactedText(),
+        contains('播放错误: 1（最近: writeError / code=-6）'),
+      );
+
       controller.toggleAudioMuted();
       await _flushEvents();
       expect(controller.audioMuted, isFalse);
@@ -2268,12 +2278,12 @@ void main() {
     }
     await _flushEvents();
     expect(sessions.first.endAudioStreamCount, 1);
-    expect(sessions.first.audio, hasLength(16));
+    expect(sessions.first.audio, hasLength(11));
 
     final ConversationDiagnostics diagnostics = await controller
         .collectDiagnostics();
     expect(diagnostics.utterancesDetected, 1);
-    expect(diagnostics.microphoneChunksHeld, 1);
+    expect(diagnostics.microphoneChunksHeld, 6);
 
     await controller.stopConversation();
     controller.dispose();
@@ -2653,9 +2663,9 @@ void main() {
         .collectDiagnostics();
     expect(diagnostics.sessionDurationMilliseconds, 200);
     expect(diagnostics.mode, ConversationMode.simultaneous);
-    expect(diagnostics.microphoneChunksSent, 16);
+    expect(diagnostics.microphoneChunksSent, 11);
     expect(diagnostics.microphoneChunksSuppressed, 0);
-    expect(diagnostics.microphoneChunksHeld, 1);
+    expect(diagnostics.microphoneChunksHeld, 6);
     expect(diagnostics.utterancesDetected, 1);
     expect(diagnostics.bargeIns, 0);
     expect(diagnostics.outputAudioChunks, 1);

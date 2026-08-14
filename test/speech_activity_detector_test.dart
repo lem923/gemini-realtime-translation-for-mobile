@@ -31,13 +31,13 @@ void main() {
     expect(detector.enterSpeechThreshold, greaterThan(detector.noiseFloor));
   });
 
-  test('forwards speech and finalizes after a 1.5 s silence tail', () {
+  test('forwards speech and finalizes after a 1.0 s silence tail', () {
     final SpeechActivityDetector detector = SpeechActivityDetector();
     expect(detector.add(toneChunk()), SpeechGateDecision.forward);
     expect(detector.inUtterance, isFalse);
     expect(detector.add(toneChunk()), SpeechGateDecision.forward);
     expect(detector.inUtterance, isTrue);
-    for (int i = 0; i < 14; i += 1) {
+    for (int i = 0; i < 9; i += 1) {
       expect(
         detector.add(Uint8List(inputChunkBytes)),
         SpeechGateDecision.forward,
@@ -57,11 +57,11 @@ void main() {
     detector.add(toneChunk());
     detector.add(toneChunk());
     expect(detector.inUtterance, isTrue);
-    for (int i = 0; i < 15; i += 1) {
+    for (int i = 0; i < 10; i += 1) {
       final SpeechGateDecision decision = detector.add(
         Uint8List(inputChunkBytes),
       );
-      if (i < 14) {
+      if (i < 9) {
         expect(decision, SpeechGateDecision.forward);
       } else {
         expect(decision, SpeechGateDecision.finalize);
