@@ -208,12 +208,14 @@ class _ModeSelector extends StatelessWidget {
     final ColorScheme colors = Theme.of(context).colorScheme;
     final bool headsetMode = controller.mode == ConversationMode.headsetSplit;
     final String hint = headsetMode
-        ? controller.headsetState == HeadsetCaptureState.available
-              ? '耳机分离：耳机麦克风采集佩戴者，手机麦克风采集对方，自动切换方向'
-              : '耳机分离：需要连接带麦克风的耳机'
+        ? controller.headsetState != HeadsetCaptureState.available
+              ? '耳机分离：需要连接带麦克风的耳机（机主戴耳机，对方看屏幕）'
+              : controller.headsetSpeakerUnavailable
+              ? '耳机分离：本机连接耳机时无法用手机扬声器播放，机主的译文请对方阅读屏幕'
+              : '耳机分离：机主（左）用耳机麦说话、译文播至手机扬声器；对方（右）用手机麦说话、译文播至耳机，自动切换方向'
         : controller.mode == ConversationMode.simultaneous
         ? '同声传译：麦克风在译文播放时保持开启，适合耳机使用'
-        : '逐句翻译：播放译文时保护麦克风，适合外放面对面使用';
+        : '逐句翻译：说完一句，听完译文，再讲下一句';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
@@ -473,6 +475,8 @@ class _LanguagePair extends StatelessWidget {
             selected: controller.activeSpeaker == SpeakerSide.a,
             onSelect: () => unawaited(controller.selectSpeaker(SpeakerSide.a)),
             onLanguage: () => _pickLanguage(context, controller, SpeakerSide.a),
+            badge: controller.isHeadsetMode ? '机主' : 'A',
+            semanticName: controller.isHeadsetMode ? '机主' : '讲话人 A',
           ),
         ),
         Padding(
@@ -490,6 +494,8 @@ class _LanguagePair extends StatelessWidget {
             selected: controller.activeSpeaker == SpeakerSide.b,
             onSelect: () => unawaited(controller.selectSpeaker(SpeakerSide.b)),
             onLanguage: () => _pickLanguage(context, controller, SpeakerSide.b),
+            badge: controller.isHeadsetMode ? '对方' : 'B',
+            semanticName: controller.isHeadsetMode ? '对方' : '讲话人 B',
           ),
         ),
       ],
@@ -504,6 +510,8 @@ class _SpeakerCard extends StatelessWidget {
     required this.selected,
     required this.onSelect,
     required this.onLanguage,
+    required this.badge,
+    required this.semanticName,
   });
 
   final SpeakerSide side;
@@ -511,6 +519,8 @@ class _SpeakerCard extends StatelessWidget {
   final bool selected;
   final VoidCallback onSelect;
   final VoidCallback onLanguage;
+  final String badge;
+  final String semanticName;
 
   @override
   Widget build(BuildContext context) {
@@ -537,9 +547,7 @@ class _SpeakerCard extends StatelessWidget {
             selected: selected,
             button: true,
             onTap: onSelect,
-            label:
-                '${side == SpeakerSide.a ? '讲话人 A' : '讲话人 B'} '
-                '${language.name}',
+            label: '$semanticName ${language.name}',
             excludeSemantics: true,
             child: InkWell(
               onTap: onSelect,
@@ -560,7 +568,7 @@ class _SpeakerCard extends StatelessWidget {
                         ),
                         const Spacer(),
                         Text(
-                          side == SpeakerSide.a ? 'A' : 'B',
+                          badge,
                           style: TextStyle(
                             color: accent,
                             fontWeight: FontWeight.w800,

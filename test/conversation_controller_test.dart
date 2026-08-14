@@ -503,14 +503,20 @@ void main() {
       await controller.startConversation();
       playback.emitRoute(AudioOutputRoute.speaker);
       sessions.first.emit(LiveAudioChunk(Uint8List(4800)));
+      capture.emit(_speechChunk());
+      capture.emit(_speechChunk());
+      for (int i = 0; i < 15; i += 1) {
+        capture.emit(_silenceChunk());
+      }
+      await _flushEvents();
 
       nowMicros = 399000;
       capture.emit(_speechChunk());
-      expect(sessions.first.audio, isEmpty);
+      expect(sessions.first.audio, hasLength(16));
 
       nowMicros = 401000;
       capture.emit(_speechChunk());
-      expect(sessions.first.audio, <List<int>>[_speechChunk()]);
+      expect(sessions.first.audio, hasLength(17));
 
       await controller.stopConversation();
       controller.dispose();
@@ -542,14 +548,20 @@ void main() {
       await controller.startConversation();
       playback.emitRoute(AudioOutputRoute.bluetooth);
       sessions.first.emit(LiveAudioChunk(Uint8List(4800)));
+      capture.emit(_speechChunk());
+      capture.emit(_speechChunk());
+      for (int i = 0; i < 15; i += 1) {
+        capture.emit(_silenceChunk());
+      }
+      await _flushEvents();
 
       nowMicros = 179000;
       capture.emit(_speechChunk());
-      expect(sessions.first.audio, isEmpty);
+      expect(sessions.first.audio, hasLength(16));
 
       nowMicros = 181000;
       capture.emit(_speechChunk());
-      expect(sessions.first.audio, <List<int>>[_speechChunk()]);
+      expect(sessions.first.audio, hasLength(17));
 
       await controller.stopConversation();
       controller.dispose();
@@ -728,14 +740,21 @@ void main() {
       sessions.first
         ..emit(LiveAudioChunk(oneSecond))
         ..emit(LiveAudioChunk(oneSecond));
+      capture.emit(_speechChunk());
+      capture.emit(_speechChunk());
+      for (int i = 0; i < 15; i += 1) {
+        capture.emit(_silenceChunk());
+      }
+      await _flushEvents();
+      await Future<void>.delayed(const Duration(milliseconds: 1100));
       await _flushEvents();
 
       nowMicros = 1500000;
       capture.emit(_speechChunk());
-      expect(sessions.first.audio, isEmpty);
+      expect(sessions.first.audio, hasLength(16));
       nowMicros = 2300001;
       capture.emit(_speechChunk());
-      expect(sessions.first.audio, <List<int>>[_speechChunk()]);
+      expect(sessions.first.audio, hasLength(17));
 
       await controller.stopConversation();
       controller.dispose();
@@ -762,11 +781,16 @@ void main() {
     await controller.initialize();
     await controller.startConversation();
     sessions.first.emit(LiveAudioChunk(Uint8List.fromList(<int>[1, 2])));
+    capture.emit(_speechChunk());
+    capture.emit(_speechChunk());
+    for (int i = 0; i < 15; i += 1) {
+      capture.emit(_silenceChunk());
+    }
     await _flushEvents();
     final Future<void> stopping = controller.stopConversation();
     await _flushEvents();
     capture.emit(_speechChunk());
-    expect(sessions.first.audio, isEmpty);
+    expect(sessions.first.audio, hasLength(16));
     expect(playback.operations, <String>['configure', 'enqueue', 'dispose']);
 
     await stopping;
@@ -800,10 +824,15 @@ void main() {
       await controller.startConversation();
       await _flushEvents();
       sessions.first.emit(LiveAudioChunk(Uint8List(48000)));
+      capture.emit(_speechChunk());
+      capture.emit(_speechChunk());
+      for (int i = 0; i < 15; i += 1) {
+        capture.emit(_silenceChunk());
+      }
       await _flushEvents();
 
       capture.emit(_speechChunk());
-      expect(sessions.first.audio, isEmpty);
+      expect(sessions.first.audio, hasLength(16));
       await controller.selectSpeaker(SpeakerSide.b);
       expect(playback.operations, <String>['configure', 'enqueue', 'flush']);
 
@@ -890,10 +919,11 @@ void main() {
     'playback failure falls back to text and keeps queue operable',
     () async {
       final _FakePlayback playback = _FakePlayback(failNextEnqueue: true);
+      final _FakeAudioCapture capture = _FakeAudioCapture();
       final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
       final ConversationController controller = ConversationController(
         keyStore: _MemoryKeyStore('stored-key'),
-        audioCapture: _FakeAudioCapture(),
+        audioCapture: capture,
         playback: playback,
         headsetCapture: _FakeHeadsetCapture(),
         sessionFactory:
@@ -907,6 +937,11 @@ void main() {
       await controller.initialize();
       await controller.startConversation();
       sessions.first.emit(LiveAudioChunk(Uint8List.fromList(<int>[1, 2])));
+      capture.emit(_speechChunk());
+      capture.emit(_speechChunk());
+      for (int i = 0; i < 15; i += 1) {
+        capture.emit(_silenceChunk());
+      }
       await _flushEvents();
       await _flushEvents();
 
@@ -2043,30 +2078,35 @@ void main() {
       await controller.startConversation();
       playback.emitRoute(AudioOutputRoute.speaker);
       sessions.first.emit(LiveAudioChunk(Uint8List(48000)));
+      capture.emit(_speechChunk());
+      capture.emit(_speechChunk());
+      for (int i = 0; i < 15; i += 1) {
+        capture.emit(_silenceChunk());
+      }
       await _flushEvents();
 
       nowMicros = 100000;
       capture.emit(_speechChunk());
-      expect(sessions.first.audio, isEmpty);
+      expect(sessions.first.audio, hasLength(16));
       nowMicros = 200000;
       capture.emit(_speechChunk());
-      expect(sessions.first.audio, isEmpty);
+      expect(sessions.first.audio, hasLength(16));
 
       nowMicros = 300000;
       capture.emit(_speechChunk());
       await _flushEvents();
-      expect(sessions.first.audio, <List<int>>[_speechChunk()]);
+      expect(sessions.first.audio, hasLength(17));
       expect(playback.operations, contains('flush'));
 
       nowMicros = 350000;
       capture.emit(_speechChunk());
       await _flushEvents();
-      expect(sessions.first.audio, hasLength(2));
+      expect(sessions.first.audio, hasLength(18));
 
       final ConversationDiagnostics diagnostics = await controller
           .collectDiagnostics();
       expect(diagnostics.bargeIns, 1);
-      expect(diagnostics.microphoneChunksSent, 2);
+      expect(diagnostics.microphoneChunksSent, 18);
       expect(diagnostics.microphoneChunksSuppressed, 2);
 
       await controller.stopConversation();
@@ -2119,47 +2159,44 @@ void main() {
     },
   );
 
-  test(
-    'simultaneous mode keeps the stream open without turn finalization',
-    () async {
-      final _FakeAudioCapture capture = _FakeAudioCapture();
-      final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
-      final ConversationController controller = ConversationController(
-        keyStore: _MemoryKeyStore('stored-key'),
-        audioCapture: capture,
-        playback: _FakePlayback(),
-        headsetCapture: _FakeHeadsetCapture(),
-        sessionFactory:
-            ({required String apiKey, required String targetLanguageCode}) {
-              final _FakeLiveSession session = _FakeLiveSession();
-              sessions.add(session);
-              return session;
-            },
-      );
+  test('simultaneous mode finalizes utterances with a stream end', () async {
+    final _FakeAudioCapture capture = _FakeAudioCapture();
+    final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
+    final ConversationController controller = ConversationController(
+      keyStore: _MemoryKeyStore('stored-key'),
+      audioCapture: capture,
+      playback: _FakePlayback(),
+      headsetCapture: _FakeHeadsetCapture(),
+      sessionFactory:
+          ({required String apiKey, required String targetLanguageCode}) {
+            final _FakeLiveSession session = _FakeLiveSession();
+            sessions.add(session);
+            return session;
+          },
+    );
 
-      await controller.initialize();
-      await controller.startConversation();
-      controller.setMode(ConversationMode.simultaneous);
-      await _flushEvents();
+    await controller.initialize();
+    await controller.startConversation();
+    controller.setMode(ConversationMode.simultaneous);
+    await _flushEvents();
 
-      capture.emit(_speechChunk());
-      capture.emit(_speechChunk());
-      for (int i = 0; i < 15; i += 1) {
-        capture.emit(_silenceChunk());
-      }
-      await _flushEvents();
-      expect(sessions.first.endAudioStreamCount, 0);
-      expect(sessions.first.audio, hasLength(16));
+    capture.emit(_speechChunk());
+    capture.emit(_speechChunk());
+    for (int i = 0; i < 15; i += 1) {
+      capture.emit(_silenceChunk());
+    }
+    await _flushEvents();
+    expect(sessions.first.endAudioStreamCount, 1);
+    expect(sessions.first.audio, hasLength(16));
 
-      final ConversationDiagnostics diagnostics = await controller
-          .collectDiagnostics();
-      expect(diagnostics.utterancesDetected, 1);
-      expect(diagnostics.microphoneChunksHeld, 1);
+    final ConversationDiagnostics diagnostics = await controller
+        .collectDiagnostics();
+    expect(diagnostics.utterancesDetected, 1);
+    expect(diagnostics.microphoneChunksHeld, 1);
 
-      await controller.stopConversation();
-      controller.dispose();
-    },
-  );
+    await controller.stopConversation();
+    controller.dispose();
+  });
 
   test(
     'headset mode fails closed when no headset microphone is present',
@@ -2523,8 +2560,8 @@ void main() {
         .collectDiagnostics();
     expect(diagnostics.sessionDurationMilliseconds, 200);
     expect(diagnostics.mode, ConversationMode.sentenceBySentence);
-    expect(diagnostics.microphoneChunksSent, 1);
-    expect(diagnostics.microphoneChunksSuppressed, 1);
+    expect(diagnostics.microphoneChunksSent, 2);
+    expect(diagnostics.microphoneChunksSuppressed, 0);
     expect(diagnostics.microphoneChunksHeld, 0);
     expect(diagnostics.utterancesDetected, 0);
     expect(diagnostics.bargeIns, 0);
@@ -2805,7 +2842,10 @@ class _FakePlayback implements PcmPlaybackGateway {
   Stream<PcmPlaybackEvent> get events => _events.stream;
 
   @override
-  Future<void> configure({required int clientGeneration}) async {
+  Future<void> configure({
+    required int clientGeneration,
+    bool forceSpeakerToPhone = false,
+  }) async {
     configuredClientGeneration = clientGeneration;
     operations.add('configure');
   }

@@ -161,7 +161,9 @@ class MainActivity : FlutterActivity() {
                         val sampleRate = arguments?.get("sampleRate") as? Int ?: 24_000
                         val clientGeneration =
                             (arguments?.get("clientGeneration") as? Number)?.toLong() ?: 0L
-                        pcmPlayer.configure(sampleRate, clientGeneration)
+                        val forceSpeaker =
+                            arguments?.get("forceSpeakerToPhone") as? Boolean ?: false
+                        pcmPlayer.configure(sampleRate, clientGeneration, forceSpeaker)
                         result.success(null)
                     }
                     "enqueue" -> {
@@ -356,7 +358,11 @@ private class PcmStreamPlayer(
     private var headsetWorker: Thread? = null
     private var configuredSampleRate = 24_000
 
-    fun configure(sampleRate: Int, clientGeneration: Long) = synchronized(lifecycleLock) {
+    fun configure(
+        sampleRate: Int,
+        clientGeneration: Long,
+        forceSpeakerToPhone: Boolean = false,
+    ) = synchronized(lifecycleLock) {
         disposeLocked()
         val channelMask = AudioFormat.CHANNEL_OUT_MONO
         val encoding = AudioFormat.ENCODING_PCM_16BIT
@@ -403,8 +409,12 @@ private class PcmStreamPlayer(
             check(requestAudioFocus(attributes, run)) { "Audio focus was not granted" }
             registerAudioDeviceCallback()
             selectPreferredCommunicationDevice()
+            if (forceSpeakerToPhone) {
+                forceBuiltinSpeaker(track)
+            }
             track.play()
             configureHeadsetLane(sampleRate, run)
+            updateLastOutputRoute()
             worker = thread(name = "translated-pcm-playback", isDaemon = true) {
                 while (run.active) {
                     val chunk = try {
@@ -467,6 +477,19 @@ private class PcmStreamPlayer(
         } catch (error: Throwable) {
             disposeLocked()
             throw error
+        }
+    }
+
+    private fun forceBuiltinSpeaker(track: AudioTrack) {
+        val speaker = audioManager
+            .getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+            .firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+            ?: return
+        try {
+            track.setPreferredDevice(speaker)
+        } catch (_: Throwable) {
+            // The platform decides the actual route; the Dart side reads the
+            // routed device from the route event and degrades gracefully.
         }
     }
 

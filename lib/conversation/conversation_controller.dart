@@ -151,6 +151,20 @@ class ConversationController extends ChangeNotifier {
     SpeakerSide.a: BytesBuilder(copy: true),
     SpeakerSide.b: BytesBuilder(copy: true),
   };
+  final Map<SpeakerSide, List<Uint8List>> _sentencePlaybackChunks =
+      <SpeakerSide, List<Uint8List>>{
+        SpeakerSide.a: <Uint8List>[],
+        SpeakerSide.b: <Uint8List>[],
+      };
+  final Map<SpeakerSide, bool> _sentencePlaybackFinalized = <SpeakerSide, bool>{
+    SpeakerSide.a: false,
+    SpeakerSide.b: false,
+  };
+  final Map<SpeakerSide, bool> _sentencePlaybackDraining = <SpeakerSide, bool>{
+    SpeakerSide.a: false,
+    SpeakerSide.b: false,
+  };
+  int _sentencePlaybackBytes = 0;
   final Map<SpeakerSide, bool> _turnAudioOverflow = <SpeakerSide, bool>{
     SpeakerSide.a: false,
     SpeakerSide.b: false,
@@ -162,6 +176,8 @@ class ConversationController extends ChangeNotifier {
   static const int maxReplayTurnBytes =
       outputSampleRateHz * bytesPerSample * 30;
   static const int maxReplayCacheBytes = 8 * 1024 * 1024;
+  static const int maxSentencePlaybackBytes =
+      outputSampleRateHz * bytesPerSample * 90;
   static const int maxCaptureRecoveryAttempts = 3;
   static const Duration captureRecoveryDelay = Duration(milliseconds: 300);
   static const int bargeInSpeechChunks = 3;
@@ -410,6 +426,7 @@ class ConversationController extends ChangeNotifier {
     _captureRecoveryAttempts = 0;
     _speechDetector = SpeechActivityDetector();
     _headsetDetector = SpeechActivityDetector();
+    _clearAllSentencePlayback();
     _suppressedSpeechStreak = 0;
     _lastBargeInMicros = -bargeInCooldownMicros;
     notifyListeners();
@@ -735,13 +752,17 @@ class ConversationController extends ChangeNotifier {
       case SpeechGateDecision.finalize:
         _microphoneChunksHeld += 1;
         _utterancesDetected += 1;
+        // Every utterance end flushes the server's cached audio with an
+        // explicit turn boundary; without it the server holds the final
+        // translation and the last words never play.
+        try {
+          session!.endAudioStream();
+        } catch (_) {
+          // A broken transport must not prevent the next utterance; the
+          // session state machine reports and reconnects on its own.
+        }
         if (_mode == ConversationMode.sentenceBySentence) {
-          try {
-            session!.endAudioStream();
-          } catch (_) {
-            // A broken transport must not prevent the next utterance; the
-            // session state machine reports and reconnects on its own.
-          }
+          _startSentencePlayback(_activeSpeaker);
         }
       case SpeechGateDecision.forward:
         _sendMicrophoneChunk(session!, chunk);
@@ -847,6 +868,7 @@ class ConversationController extends ChangeNotifier {
       return;
     }
     final SpeakerSide previous = _activeSpeaker;
+    _clearSentencePlayback(previous);
     try {
       _sessions[previous]?.endAudioStream();
     } catch (_) {
@@ -997,7 +1019,9 @@ class ConversationController extends ChangeNotifier {
               // so replay audio cannot leak into the new response.
               unawaited(_flushPlayback());
             }
-            if (isHeadsetMode) {
+            if (_mode == ConversationMode.sentenceBySentence) {
+              _bufferSentenceAudio(side, bytes);
+            } else if (isHeadsetMode) {
               _queueTrackPlayback(side, bytes);
             } else {
               _queuePlayback(bytes);
@@ -1010,6 +1034,9 @@ class ConversationController extends ChangeNotifier {
       case LiveTurnComplete():
         if (side != _activeSpeaker) return;
         _commitTurn(side);
+        if (_mode == ConversationMode.sentenceBySentence) {
+          _startSentencePlayback(side);
+        }
         if (_captureSubscription != null &&
             _phase == ConversationPhase.translating) {
           _phase = ConversationPhase.listening;
@@ -1018,6 +1045,7 @@ class ConversationController extends ChangeNotifier {
       case LiveInterrupted():
         if (side == _activeSpeaker) {
           _discardTurnAudio(side);
+          _clearSentencePlayback(side);
           // Interruption is an explicit turn boundary. Keep already visible
           // text, but never merge it into the next utterance or replay stale
           // audio from the interrupted response.
@@ -1107,14 +1135,98 @@ class ConversationController extends ChangeNotifier {
     _appendPlayback(() => _playback.enqueue(bytes));
   }
 
+  /// Sentence-by-sentence playback: translated audio is buffered while the
+  /// speaker is still talking and starts playing only once the utterance is
+  /// finalized, so the user never hears the translation while speaking.
+  void _bufferSentenceAudio(SpeakerSide side, Uint8List bytes) {
+    if (_sentencePlaybackFinalized[side] == true) {
+      _queuePlayback(bytes);
+      return;
+    }
+    final List<Uint8List> chunks = _sentencePlaybackChunks[side]!;
+    chunks.add(bytes);
+    _sentencePlaybackBytes += bytes.length;
+    while (_sentencePlaybackBytes > maxSentencePlaybackBytes &&
+        chunks.isNotEmpty) {
+      final Uint8List removed = chunks.removeAt(0);
+      _sentencePlaybackBytes -= removed.length;
+    }
+  }
+
+  void _startSentencePlayback(SpeakerSide side) {
+    _sentencePlaybackFinalized[side] = true;
+    if (_sentencePlaybackDraining[side] == true) {
+      return;
+    }
+    unawaited(_drainSentencePlayback(side));
+  }
+
+  Future<void> _drainSentencePlayback(SpeakerSide side) async {
+    _sentencePlaybackDraining[side] = true;
+    try {
+      while (!_disposed && !_playbackFailureReported) {
+        final List<Uint8List> chunks = _sentencePlaybackChunks[side]!;
+        if (chunks.isEmpty) {
+          break;
+        }
+        final Uint8List chunk = chunks.removeAt(0);
+        _sentencePlaybackBytes -= chunk.length;
+        _queuePlayback(chunk);
+        final int chunkDurationMicros =
+            chunk.length *
+            Duration.microsecondsPerSecond ~/
+            (outputSampleRateHz * bytesPerSample);
+        await _waitForPlayback();
+        await Future<void>.delayed(Duration(microseconds: chunkDurationMicros));
+      }
+    } finally {
+      _sentencePlaybackDraining[side] = false;
+    }
+  }
+
+  void _clearSentencePlayback(SpeakerSide side) {
+    _sentencePlaybackBytes -= _sentencePlaybackChunks[side]!.fold(
+      0,
+      (int total, Uint8List chunk) => total + chunk.length,
+    );
+    _sentencePlaybackChunks[side]!.clear();
+    _sentencePlaybackFinalized[side] = false;
+  }
+
+  void _clearAllSentencePlayback() {
+    for (final SpeakerSide side in SpeakerSide.values) {
+      _clearSentencePlayback(side);
+    }
+  }
+
   /// Headset-split playback: speaker A's translation goes to the phone
   /// speaker (for B) and speaker B's translation goes to the headset (for A).
   /// Only the phone-speaker lane feeds the echo-guard schedule, because it is
   /// the one the built-in microphone can hear.
+  bool get headsetSpeakerUnavailable {
+    if (!isHeadsetMode) {
+      return false;
+    }
+    return switch (_activeOutputRoute) {
+      AudioOutputRoute.wired ||
+      AudioOutputRoute.bluetooth ||
+      AudioOutputRoute.usb ||
+      AudioOutputRoute.hearingAid ||
+      AudioOutputRoute.hdmi => true,
+      _ => false,
+    };
+  }
+
   void _queueTrackPlayback(SpeakerSide side, Uint8List bytes) {
     final PlaybackTrack track = side == SpeakerSide.a
         ? PlaybackTrack.phoneSpeaker
         : PlaybackTrack.headset;
+    if (track == PlaybackTrack.phoneSpeaker && headsetSpeakerUnavailable) {
+      // The platform keeps routing the speaker lane into the headset (SCO).
+      // Skip it so the wearer's own translation is not played back into the
+      // headset; the other person reads it from the screen instead.
+      return;
+    }
     _appendPlayback(() => _playback.enqueueTrack(track, bytes));
     if (track == PlaybackTrack.phoneSpeaker) {
       final int durationMicros =
@@ -1162,7 +1274,10 @@ class ConversationController extends ChangeNotifier {
       return;
     }
     final int generation = _playbackGeneration;
-    await _playback.configure(clientGeneration: generation);
+    await _playback.configure(
+      clientGeneration: generation,
+      forceSpeakerToPhone: isHeadsetMode,
+    );
     if (generation != _playbackGeneration) {
       return;
     }
@@ -1369,6 +1484,9 @@ class ConversationController extends ChangeNotifier {
     }
     _mode = mode;
     _errorMessage = null;
+    if (mode != ConversationMode.sentenceBySentence) {
+      _clearAllSentencePlayback();
+    }
     if (mode == ConversationMode.headsetSplit) {
       unawaited(_refreshHeadsetState());
     }
@@ -1403,6 +1521,7 @@ class ConversationController extends ChangeNotifier {
       _directionSwitches += 1;
     }
     final SpeakerSide previousSide = _activeSpeaker;
+    _clearSentencePlayback(previousSide);
     try {
       _sessions[previousSide]?.endAudioStream();
     } catch (_) {
@@ -1772,6 +1891,7 @@ class ConversationController extends ChangeNotifier {
       // A broken transport must not prevent local media cleanup.
     }
     _commitTurn(_activeSpeaker);
+    _clearAllSentencePlayback();
     final StreamSubscription<Uint8List>? captureSubscription =
         _captureSubscription;
     _captureSubscription = null;

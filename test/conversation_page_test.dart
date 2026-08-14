@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -960,7 +959,10 @@ class _NoopPlayback implements PcmPlaybackGateway {
   Stream<PcmPlaybackEvent> get events => const Stream<PcmPlaybackEvent>.empty();
 
   @override
-  Future<void> configure({required int clientGeneration}) async {}
+  Future<void> configure({
+    required int clientGeneration,
+    bool forceSpeakerToPhone = false,
+  }) async {}
 
   @override
   Future<void> dispose() async {}

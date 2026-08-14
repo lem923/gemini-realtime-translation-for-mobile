@@ -142,7 +142,10 @@ class PcmPlaybackMetrics {
 
 abstract interface class PcmPlaybackGateway {
   Stream<PcmPlaybackEvent> get events;
-  Future<void> configure({required int clientGeneration});
+  Future<void> configure({
+    required int clientGeneration,
+    bool forceSpeakerToPhone = false,
+  });
   Future<void> enqueue(Uint8List pcm);
   Future<void> enqueueTrack(PlaybackTrack track, Uint8List pcm);
   Future<void> flush();
@@ -167,12 +170,15 @@ class PlatformPcmPlaybackGateway implements PcmPlaybackGateway {
       .cast<PcmPlaybackEvent>();
 
   @override
-  Future<void> configure({required int clientGeneration}) =>
-      _channel.invokeMethod<void>('configure', <String, Object>{
-        'sampleRate': outputSampleRateHz,
-        'channels': channelCount,
-        'clientGeneration': clientGeneration,
-      });
+  Future<void> configure({
+    required int clientGeneration,
+    bool forceSpeakerToPhone = false,
+  }) => _channel.invokeMethod<void>('configure', <String, Object>{
+    'sampleRate': outputSampleRateHz,
+    'channels': channelCount,
+    'clientGeneration': clientGeneration,
+    'forceSpeakerToPhone': forceSpeakerToPhone,
+  });
 
   @override
   Future<void> enqueue(Uint8List pcm) =>

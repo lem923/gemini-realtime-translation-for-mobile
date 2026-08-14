@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-08-14
+
+### Changed
+
+- 耳机分离 mode now binds the sides explicitly: 机主 (left) uses the headset
+  mic with translations played on the phone speaker, 对方 (right) uses the
+  built-in mic with translations played on the headset. The speaker lane is
+  forced to the builtin speaker; when the platform cannot split playback
+  (Bluetooth SCO keeps routing into the headset), the wearer's own
+  translation is no longer played into the headset and the other person
+  reads it from the screen (lecture fallback), with a clear hint.
+- 逐句翻译 now buffers translated audio while the speaker is talking and
+  starts playback only after the sentence finalizes, so the user no longer
+  hears the translation while speaking; long sentences are no longer
+  interrupted by the echo guard.
+- Every utterance end now sends `audioStreamEnd` in all modes, so the server
+  flushes its cached final translation and the last words no longer go
+  missing in 同声传译.
+
+### Tests
+
+- 123 Flutter tests pass; Android host tests and lint pass.
+
 ## [0.23.2] - 2026-08-14
 
 ### Fixed
