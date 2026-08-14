@@ -31,7 +31,7 @@ class ConversationController extends ChangeNotifier {
     LiveSessionFactory? sessionFactory,
     int Function()? monotonicMicros,
     this.cleanupTimeout = const Duration(seconds: 2),
-    this.tailGraceDuration = const Duration(milliseconds: 1500),
+    this.tailGraceDuration = const Duration(milliseconds: 2000),
   }) : _keyStore = keyStore ?? SecureApiKeyStore(),
        _audioCapture = audioCapture ?? RecordAudioCaptureGateway(),
        _playback = playback ?? PlatformPcmPlaybackGateway(),
@@ -1989,7 +1989,7 @@ class ConversationController extends ChangeNotifier {
     while (stopwatch.elapsed < _stopDrainTimeout) {
       try {
         final PcmPlaybackMetrics metrics = await _playback.metrics();
-        if (metrics.queuedBytes <= 0) {
+        if (metrics.pendingPlaybackBytes <= 0) {
           return;
         }
       } catch (_) {

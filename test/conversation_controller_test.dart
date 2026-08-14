@@ -868,6 +868,40 @@ void main() {
   );
 
   test(
+    'graceful stop waits for the AudioTrack buffer to flush',
+    () async {
+      final _FakePlayback playback = _FakePlayback();
+      final ConversationController controller = ConversationController(
+        keyStore: _MemoryKeyStore('stored-key'),
+        audioCapture: _FakeAudioCapture(),
+        playback: playback,
+        headsetCapture: _FakeHeadsetCapture(),
+        tailGraceDuration: Duration.zero,
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) =>
+                _FakeLiveSession(),
+      );
+
+      await controller.initialize();
+      controller.setMode(ConversationMode.simultaneous);
+      await controller.startConversation();
+      playback.pendingPlaybackBytes = 4800;
+
+      final Future<void> stopping = controller.stopConversation(
+        drainPlayback: true,
+      );
+      await _flushEvents();
+      // The queue is empty but the track buffer is not: keep waiting.
+      expect(playback.disposeCount, 0);
+
+      playback.pendingPlaybackBytes = 0;
+      await stopping;
+      expect(playback.disposeCount, 1);
+      controller.dispose();
+    },
+  );
+
+  test(
     'graceful stop accepts the final audio chunks after the stop boundary',
     () async {
       final _FakePlayback playback = _FakePlayback();
@@ -2958,6 +2992,7 @@ class _FakePlayback implements PcmPlaybackGateway {
   bool failNextEnqueue;
   bool failNextFlush;
   final PcmPlaybackMetrics playbackMetrics;
+  int pendingPlaybackBytes = 0;
   final StreamController<PcmPlaybackEvent> _events =
       StreamController<PcmPlaybackEvent>.broadcast(sync: true);
   final List<List<int>> enqueued = <List<int>>[];
@@ -3030,7 +3065,14 @@ class _FakePlayback implements PcmPlaybackGateway {
   }
 
   @override
-  Future<PcmPlaybackMetrics> metrics() async => playbackMetrics;
+  Future<PcmPlaybackMetrics> metrics() async => PcmPlaybackMetrics(
+    queuedBytes: playbackMetrics.queuedBytes,
+    maxQueuedBytes: playbackMetrics.maxQueuedBytes,
+    droppedChunks: playbackMetrics.droppedChunks,
+    pendingPlaybackBytes: pendingPlaybackBytes,
+    outputRoute: playbackMetrics.outputRoute,
+    audioFocusGranted: playbackMetrics.audioFocusGranted,
+  );
 }
 
 class _FakeLiveSession implements LiveTranslationSession {

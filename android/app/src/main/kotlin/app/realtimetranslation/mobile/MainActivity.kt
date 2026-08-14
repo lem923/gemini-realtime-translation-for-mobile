@@ -383,6 +383,8 @@ private class PcmStreamPlayer(
     private var headsetQueuedBytes = 0
     private var headsetWorker: Thread? = null
     private var configuredSampleRate = 24_000
+    private var framesWrittenSincePlay = 0L
+    private var headsetFramesWrittenSincePlay = 0L
     @Volatile
     var mainEnqueueExecutor = newMainEnqueueExecutor()
         private set
@@ -444,6 +446,7 @@ private class PcmStreamPlayer(
             if (forceSpeakerToPhone) {
                 forceBuiltinSpeaker(track)
             }
+            framesWrittenSincePlay = 0
             track.play()
             configureHeadsetLane(sampleRate, run)
             updateLastOutputRoute()
@@ -473,12 +476,14 @@ private class PcmStreamPlayer(
                                 ) {
                                     0
                                 } else {
-                                    track.write(
+                                    val written = track.write(
                                         chunk.bytes,
                                         offset,
                                         byteCount,
                                         AudioTrack.WRITE_NON_BLOCKING,
                                     )
+                                    recordWrittenFrames(track, written)
+                                    written
                                 }
                             }
                         },
@@ -560,6 +565,7 @@ private class PcmStreamPlayer(
                 }
                 track.pause()
                 track.flush()
+                resetWrittenFrames(track)
                 if (run.active) {
                     track.play()
                 }
@@ -577,12 +583,14 @@ private class PcmStreamPlayer(
                     if (playbackRun !== run || !run.accepts(chunk)) {
                         0
                     } else {
-                        track.write(
+                        val written = track.write(
                             chunk.bytes,
                             offset,
                             byteCount,
                             AudioTrack.WRITE_NON_BLOCKING,
                         )
+                        recordWrittenFrames(track, written)
+                        written
                     }
                 }
             },
@@ -615,12 +623,14 @@ private class PcmStreamPlayer(
                     ) {
                         0
                     } else {
-                        track.write(
+                        val written = track.write(
                             chunk.bytes,
                             offset,
                             byteCount,
                             AudioTrack.WRITE_NON_BLOCKING,
                         )
+                        recordWrittenFrames(track, written)
+                        written
                     }
                 }
             },
@@ -685,6 +695,7 @@ private class PcmStreamPlayer(
                     { previous?.release() },
                 )
                 try {
+                    framesWrittenSincePlay = 0
                     rebuilt.play()
                 } catch (_: Throwable) {
                     rebuilt.release()
@@ -778,6 +789,7 @@ private class PcmStreamPlayer(
             return
         }
         try {
+            headsetFramesWrittenSincePlay = 0
             track.play()
         } catch (_: Throwable) {
             track.release()
@@ -812,12 +824,14 @@ private class PcmStreamPlayer(
                             ) {
                                 0
                             } else {
-                                track.write(
+                                val written = track.write(
                                     chunk.bytes,
                                     offset,
                                     byteCount,
                                     AudioTrack.WRITE_NON_BLOCKING,
                                 )
+                                recordWrittenFrames(track, written)
+                                written
                             }
                         }
                     },
@@ -1006,6 +1020,7 @@ private class PcmStreamPlayer(
             if (track.state == AudioTrack.STATE_INITIALIZED) {
                 track.pause()
                 track.flush()
+                resetWrittenFrames(track)
                 if (playbackRun === run && run?.active == true) {
                     track.play()
                 }
@@ -1023,6 +1038,7 @@ private class PcmStreamPlayer(
             if (track.state == AudioTrack.STATE_INITIALIZED) {
                 track.pause()
                 track.flush()
+                resetWrittenFrames(track)
                 if (resumePlayback && playbackRun === run && runMayResume) {
                     track.play()
                 }
@@ -1034,6 +1050,7 @@ private class PcmStreamPlayer(
                 if (headset.state == AudioTrack.STATE_INITIALIZED) {
                     headset.pause()
                     headset.flush()
+                    resetWrittenFrames(headset)
                     if (resumePlayback && playbackRun === run && runMayResume) {
                         headset.play()
                     }
@@ -1044,14 +1061,56 @@ private class PcmStreamPlayer(
 
     fun metrics(): Map<String, Any> {
         updateLastOutputRoute()
+        val buffered = bufferedPlaybackBytes()
         return synchronized(queueLock) {
             mapOf(
                 "queuedBytes" to queuedBytes,
                 "maxQueuedBytes" to maxQueuedBytes,
                 "droppedChunks" to droppedChunks,
+                "pendingPlaybackBytes" to (queuedBytes + headsetQueuedBytes + buffered),
                 "outputRoute" to lastOutputRoute,
                 "audioFocusGranted" to audioFocusGranted,
             )
+        }
+    }
+
+    /** Bytes already written to the AudioTrack but not yet audible. */
+    private fun bufferedPlaybackBytes(): Long = synchronized(trackOperationLock) {
+        bufferedBytesFor(audioTrack, framesWrittenSincePlay) +
+            bufferedBytesFor(headsetTrack, headsetFramesWrittenSincePlay)
+    }
+
+    private fun bufferedBytesFor(track: AudioTrack?, framesWritten: Long): Long {
+        if (track == null) {
+            return 0L
+        }
+        return try {
+            if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
+                0L
+            } else {
+                ((framesWritten - track.playbackHeadPosition).coerceAtLeast(0)) * 2
+            }
+        } catch (_: Throwable) {
+            0L
+        }
+    }
+
+    private fun recordWrittenFrames(track: AudioTrack, writtenBytes: Int) {
+        if (writtenBytes <= 0) {
+            return
+        }
+        if (track === audioTrack) {
+            framesWrittenSincePlay += writtenBytes / 2
+        } else if (track === headsetTrack) {
+            headsetFramesWrittenSincePlay += writtenBytes / 2
+        }
+    }
+
+    private fun resetWrittenFrames(track: AudioTrack) {
+        if (track === audioTrack) {
+            framesWrittenSincePlay = 0
+        } else if (track === headsetTrack) {
+            headsetFramesWrittenSincePlay = 0
         }
     }
 

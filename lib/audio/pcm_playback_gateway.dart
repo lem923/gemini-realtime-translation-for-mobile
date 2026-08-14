@@ -94,6 +94,7 @@ class PcmPlaybackMetrics {
     required this.queuedBytes,
     required this.maxQueuedBytes,
     required this.droppedChunks,
+    this.pendingPlaybackBytes = 0,
     required this.outputRoute,
     required this.audioFocusGranted,
   });
@@ -102,6 +103,7 @@ class PcmPlaybackMetrics {
     : queuedBytes = 0,
       maxQueuedBytes = 0,
       droppedChunks = 0,
+      pendingPlaybackBytes = 0,
       outputRoute = AudioOutputRoute.unknown,
       audioFocusGranted = false;
 
@@ -115,6 +117,7 @@ class PcmPlaybackMetrics {
       queuedBytes: readInt('queuedBytes'),
       maxQueuedBytes: readInt('maxQueuedBytes'),
       droppedChunks: readInt('droppedChunks'),
+      pendingPlaybackBytes: readInt('pendingPlaybackBytes'),
       outputRoute: AudioOutputRoute.values.firstWhere(
         (AudioOutputRoute route) => route.name == value?['outputRoute'],
         orElse: () => AudioOutputRoute.unknown,
@@ -126,6 +129,10 @@ class PcmPlaybackMetrics {
   final int queuedBytes;
   final int maxQueuedBytes;
   final int droppedChunks;
+
+  /// Queued bytes plus bytes already written to the AudioTrack but not yet
+  /// audible; drains to zero when the translated tail has fully played out.
+  final int pendingPlaybackBytes;
   final AudioOutputRoute outputRoute;
   final bool audioFocusGranted;
 

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.36.0] - 2026-08-14
+
+### Fixed
+
+- 译文尾部仍未完整播放：优雅收尾只等待了入队队列，没有计入已写入
+  AudioTrack 内部缓冲、尚未播出的音频。原生指标现在报告
+  `pendingPlaybackBytes`（队列字节 + 主/耳机轨已写入未播出的帧），停止
+  收尾等待它归零后才释放播放器，最后几个单词不再被截断。
+- 停止收尾的模型尾音宽限期从 1.5 秒延长到 2 秒。
+
+### Tests
+
+- 127 Flutter tests pass; Android host tests and lint pass.
+
 ## [0.35.0] - 2026-08-14
 
 ### Fixed
