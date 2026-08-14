@@ -58,6 +58,20 @@ class GeminiLiveProtocol {
     return jsonEncode(<String, Object?>{'setup': setup});
   }
 
+  /// Minimal setup for transcription-only sessions (ASR): drops the config
+  /// fields that some live models reject.
+  static String asrSetupMessage({String model = GeminiLiveProtocol.model}) {
+    return jsonEncode(<String, Object?>{
+      'setup': <String, Object?>{
+        'model': 'models/$model',
+        'generationConfig': <String, Object?>{
+          'responseModalities': <String>['AUDIO'],
+        },
+        'inputAudioTranscription': <String, Object?>{},
+      },
+    });
+  }
+
   static String audioMessage(Uint8List pcm) {
     return jsonEncode(<String, Object?>{
       'realtimeInput': <String, Object?>{

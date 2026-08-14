@@ -33,6 +33,7 @@ class GeminiLiveSession implements LiveTranslationSession {
     this.translationEnabled = true,
     this.slidingWindowTargetTokens,
     this.compressionTriggerTokens,
+    this.asrMinimalSetup = false,
     Uri? endpoint,
     HttpClient Function()? httpClientFactory,
     WebSocketChannel Function(Uri uri, HttpClient client)? channelFactory,
@@ -56,6 +57,7 @@ class GeminiLiveSession implements LiveTranslationSession {
   final String targetLanguageCode;
   final String model;
   final bool translationEnabled;
+  final bool asrMinimalSetup;
   final int? slidingWindowTargetTokens;
   final int? compressionTriggerTokens;
   final Uri endpoint;
@@ -147,16 +149,20 @@ class GeminiLiveSession implements LiveTranslationSession {
       if (_disposed || generation != _generation) {
         return;
       }
-      channel.sink.add(
-        GeminiLiveProtocol.setupMessage(
-          targetLanguageCode: targetLanguageCode,
-          resumptionHandle: _resumptionHandle,
-          slidingWindowTargetTokens: slidingWindowTargetTokens,
-          compressionTriggerTokens: compressionTriggerTokens,
-          model: model,
-          translationEnabled: translationEnabled,
-        ),
-      );
+      if (asrMinimalSetup) {
+        channel.sink.add(GeminiLiveProtocol.asrSetupMessage(model: model));
+      } else {
+        channel.sink.add(
+          GeminiLiveProtocol.setupMessage(
+            targetLanguageCode: targetLanguageCode,
+            resumptionHandle: _resumptionHandle,
+            slidingWindowTargetTokens: slidingWindowTargetTokens,
+            compressionTriggerTokens: compressionTriggerTokens,
+            model: model,
+            translationEnabled: translationEnabled,
+          ),
+        );
+      }
       await setupFuture.timeout(const Duration(seconds: 15));
       _reconnectAttempt = 0;
     } on TimeoutException {

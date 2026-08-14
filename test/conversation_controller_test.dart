@@ -2214,8 +2214,8 @@ void main() {
       );
 
       await controller.initialize();
-      await controller.startConversation();
       controller.setMode(ConversationMode.simultaneous);
+      await controller.startConversation();
       playback.emitRoute(AudioOutputRoute.speaker);
       sessions.first.emit(LiveAudioChunk(Uint8List(48000)));
       await _flushEvents();
@@ -2257,8 +2257,8 @@ void main() {
     );
 
     await controller.initialize();
-    await controller.startConversation();
     controller.setMode(ConversationMode.simultaneous);
+    await controller.startConversation();
     await _flushEvents();
 
     capture.emit(_speechChunk());

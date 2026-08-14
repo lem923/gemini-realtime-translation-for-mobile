@@ -1232,6 +1232,19 @@ class _PttDock extends StatelessWidget {
         ),
       );
     }
+    if (!controller.isListening && !controller.isBusy) {
+      return SizedBox(
+        height: 58,
+        child: FilledButton.icon(
+          onPressed: () => unawaited(controller.startConversation()),
+          icon: const Icon(Icons.mic_rounded),
+          label: const Text(
+            '开始翻译',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+          ),
+        ),
+      );
+    }
     final bool pipelineBusy =
         controller.pipelineStatus != SentencePipelineStatus.idle;
     final String statusLabel = switch (controller.pipelineStatus) {

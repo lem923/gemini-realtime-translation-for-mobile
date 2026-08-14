@@ -510,10 +510,14 @@ private class PcmStreamPlayer(
                             if (!run.active || playbackRun !== run) break
                         }
                         is PlaybackWriteOutcome.Failed -> {
+                            val retryFailure = retryTrackWrite(track, chunk, run)
+                            if (retryFailure == null) {
+                                continue
+                            }
                             run.stop()
                             if (playbackRun === run) {
                                 onPlaybackFailure(
-                                    outcome.failure.copy(
+                                    retryFailure.copy(
                                         clientGeneration = run.clientGeneration,
                                     ),
                                 )
@@ -526,6 +530,60 @@ private class PcmStreamPlayer(
         } catch (error: Throwable) {
             disposeLocked()
             throw error
+        }
+    }
+
+    /**
+     * One defensive write retry after a transient track failure (route or
+     * focus changes can leave the track in a bad state on some devices).
+     * Returns the failure to report, or null when the retry succeeded.
+     */
+    private fun retryTrackWrite(
+        track: AudioTrack,
+        chunk: PlaybackChunk,
+        run: PlaybackRunState,
+    ): PlaybackWriteFailure? {
+        try {
+            synchronized(trackOperationLock) {
+                if (track.state != AudioTrack.STATE_INITIALIZED) {
+                    return PlaybackWriteFailure(reason = "trackNotInitialized")
+                }
+                track.pause()
+                track.flush()
+                if (run.active) {
+                    track.play()
+                }
+            }
+        } catch (_: Throwable) {
+            return PlaybackWriteFailure(reason = "writeRetryException")
+        }
+        val retry = PlaybackWritePump.write(
+            byteCount = chunk.bytes.size,
+            isActive = {
+                playbackRun === run && run.accepts(chunk)
+            },
+            writeNonBlocking = { offset, byteCount ->
+                synchronized(trackOperationLock) {
+                    if (playbackRun !== run || !run.accepts(chunk)) {
+                        0
+                    } else {
+                        track.write(
+                            chunk.bytes,
+                            offset,
+                            byteCount,
+                            AudioTrack.WRITE_NON_BLOCKING,
+                        )
+                    }
+                }
+            },
+            awaitWritable = {
+                Thread.sleep(NON_BLOCKING_RETRY_MILLISECONDS)
+            },
+        )
+        return when (retry) {
+            PlaybackWriteOutcome.Completed -> null
+            PlaybackWriteOutcome.Cancelled -> null
+            is PlaybackWriteOutcome.Failed -> retry.failure
         }
     }
 
@@ -663,10 +721,14 @@ private class PcmStreamPlayer(
                         if (!run.active || headsetTrack !== track) break
                     }
                     is PlaybackWriteOutcome.Failed -> {
+                        val retryFailure = retryTrackWrite(track, chunk, run)
+                        if (retryFailure == null) {
+                            continue
+                        }
                         run.stop()
                         if (playbackRun === run) {
                             onPlaybackFailure(
-                                outcome.failure.copy(
+                                retryFailure.copy(
                                     clientGeneration = run.clientGeneration,
                                 ),
                             )

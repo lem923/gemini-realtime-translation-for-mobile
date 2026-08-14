@@ -763,14 +763,21 @@ class ConversationController extends ChangeNotifier {
       // the button is held; the pre-ready window is buffered and flushed
       // once the session is up.
       if (_pttActive && decision == SpeechGateDecision.forward) {
+        // Keep a bounded local copy as the fallback path for regions where
+        // the live ASR session is rejected; stream to it when ready.
+        _pttBuffer.add(chunk);
         if (_sentenceAsr.isReady) {
           _sentenceAsr.addPcm(chunk);
-        } else {
-          _pttBuffer.add(chunk);
         }
       } else if (decision == SpeechGateDecision.hold ||
           decision == SpeechGateDecision.finalize) {
         _microphoneChunksHeld += 1;
+      }
+      if (_pttBuffer.length > maxSentencePlaybackBytes) {
+        final Uint8List bytes = _pttBuffer.takeBytes();
+        _pttBuffer.add(
+          Uint8List.sublistView(bytes, bytes.length - inputChunkBytes),
+        );
       }
       return;
     }
@@ -893,10 +900,6 @@ class ConversationController extends ChangeNotifier {
     }
     _pttActive = false;
     notifyListeners();
-    _pttBuffer.takeBytes();
-    _pttBuffer = BytesBuilder(copy: true);
-    // Audio streamed live to the ASR while held; the pre-ready window was
-    // flushed to the session once it became ready.
     unawaited(_runSentencePipeline());
   }
 
@@ -926,8 +929,23 @@ class ConversationController extends ChangeNotifier {
     }
     _pipelineStatus = SentencePipelineStatus.recognizing;
     notifyListeners();
+    final Uint8List buffered = _pttBuffer.takeBytes();
+    _pttBuffer = BytesBuilder(copy: true);
     try {
-      final String sourceText = await _sentenceAsr.finalize();
+      String sourceText;
+      try {
+        sourceText = await _sentenceAsr.finalize();
+      } on Object {
+        // Live ASR rejected (region/key) or not ready: fall back to the REST
+        // ASR on the buffered audio.
+        if (buffered.isEmpty) {
+          rethrow;
+        }
+        sourceText = await RestSentenceTranslator.transcribeViaRest(
+          apiKey: _apiKey,
+          pcm: buffered,
+        );
+      }
       if (_disposed) {
         return;
       }
@@ -1594,9 +1612,8 @@ class ConversationController extends ChangeNotifier {
     if (_mode == mode || _disposed) {
       return;
     }
-    final bool captureLayoutChanges =
-        mode == ConversationMode.lecture || _mode == ConversationMode.lecture;
-    if (captureLayoutChanges && (isListening || _stopOperation != null)) {
+    if (isListening || _stopOperation != null || isBusy) {
+      // Switching modes restarts the conversation with the new configuration.
       unawaited(stopConversation());
     }
     _mode = mode;

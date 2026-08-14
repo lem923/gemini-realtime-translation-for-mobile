@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.29.0] - 2026-08-14
+
+### Fixed
+
+- 逐句翻译 ASR rejection: the live ASR session now uses a minimal
+  transcription-only setup (no context compression / VAD config fields that
+  some live models reject), and when the live session is rejected or not
+  ready, the pipeline falls back to the REST ASR (gemini-2.5-pro, inline
+  audio) using the buffered recording. The recording is always kept locally
+  as the fallback source.
+- Simultaneous/lecture playback failure: native playback now retries the
+  track once (pause/flush/play + rewrite) before reporting a failure, which
+  recovers transient route/focus-related track errors instead of dropping to
+  text-only.
+- Switching conversation modes now always stops an active conversation, and
+  the bottom button returns to 开始翻译 in the idle state.
+
+### Tests
+
+- 124 Flutter tests pass; Android host tests and lint pass.
+
 ## [0.28.0] - 2026-08-14
 
 ### Changed
