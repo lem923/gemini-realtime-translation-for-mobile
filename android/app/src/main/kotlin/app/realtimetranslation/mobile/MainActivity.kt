@@ -47,6 +47,7 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        CrashLog.clear(this)
         CrashLog.install(this)
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,

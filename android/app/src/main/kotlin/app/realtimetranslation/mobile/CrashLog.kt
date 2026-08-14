@@ -15,6 +15,14 @@ internal object CrashLog {
     private const val READ_TAIL_BYTES = 4096
     private const val FILE_NAME = "crash_log.txt"
 
+    fun clear(context: Context) {
+        try {
+            File(context.filesDir, FILE_NAME).delete()
+        } catch (_: Throwable) {
+            // Best-effort; stale entries only affect diagnostics readability.
+        }
+    }
+
     fun install(context: Context) {
         val previous = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
