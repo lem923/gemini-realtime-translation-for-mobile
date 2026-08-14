@@ -23,6 +23,7 @@ Future<void> main(List<String> arguments) async {
     targetLanguageCode: 'en',
     model: model,
     translationEnabled: false,
+    asrMinimalSetup: true,
   );
   final Stopwatch stopwatch = Stopwatch()..start();
   final StringBuffer transcript = StringBuffer();

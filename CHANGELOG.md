@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.30.0] - 2026-08-14
+
+### Changed
+
+- Removed the REST ASR fallback in 逐句翻译: the live ASR session
+  (gemini-3.1-flash-live-preview) is the only audio path. Verified that the
+  flash/pro families reject inline audio in REST generateContent and that
+  gemini-2.5-pro hallucinates transcripts, so a wrong fallback is worse than
+  an explicit error: on session rejection the user gets a clear message and
+  can retry.
+
+### Tests
+
+- 124 Flutter tests pass; Android host tests and lint pass.
+
 ## [0.29.0] - 2026-08-14
 
 ### Fixed

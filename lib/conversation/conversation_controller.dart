@@ -929,23 +929,8 @@ class ConversationController extends ChangeNotifier {
     }
     _pipelineStatus = SentencePipelineStatus.recognizing;
     notifyListeners();
-    final Uint8List buffered = _pttBuffer.takeBytes();
-    _pttBuffer = BytesBuilder(copy: true);
     try {
-      String sourceText;
-      try {
-        sourceText = await _sentenceAsr.finalize();
-      } on Object {
-        // Live ASR rejected (region/key) or not ready: fall back to the REST
-        // ASR on the buffered audio.
-        if (buffered.isEmpty) {
-          rethrow;
-        }
-        sourceText = await RestSentenceTranslator.transcribeViaRest(
-          apiKey: _apiKey,
-          pcm: buffered,
-        );
-      }
+      final String sourceText = await _sentenceAsr.finalize();
       if (_disposed) {
         return;
       }
