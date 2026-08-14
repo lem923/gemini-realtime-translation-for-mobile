@@ -122,6 +122,7 @@ class ConversationController extends ChangeNotifier {
   int _microphoneChunksSuppressed = 0;
   int _microphoneChunksHeld = 0;
   int _utterancesDetected = 0;
+  ConversationMode _diagnosticMode = ConversationMode.sentenceBySentence;
   int _bargeIns = 0;
   int _sentenceTurnsCompleted = 0;
   int _autoDirectionSwitches = 0;
@@ -429,6 +430,7 @@ class ConversationController extends ChangeNotifier {
     _phase = ConversationPhase.connecting;
     _errorMessage = null;
     _resetDiagnostics(_monotonicMicros());
+    _diagnosticMode = _mode;
     // A playback failure or audio interruption in an earlier conversation
     // must not silence the new one: mute is a per-conversation state.
     _audioMuted = false;
@@ -1213,7 +1215,7 @@ class ConversationController extends ChangeNotifier {
         })
         .catchError((Object error, StackTrace stackTrace) {
           if (generation == _playbackGeneration) {
-            _handlePlaybackFailure();
+            _handlePlaybackFailure(reason: error.toString());
           }
         });
   }
@@ -1651,9 +1653,9 @@ class ConversationController extends ChangeNotifier {
       _audioMuted = false;
       _errorMessage = null;
       notifyListeners();
-    } catch (_) {
+    } catch (error) {
       _playbackFailureReported = false;
-      _handlePlaybackFailure();
+      _handlePlaybackFailure(reason: error.toString());
     }
   }
 
@@ -1775,8 +1777,8 @@ class ConversationController extends ChangeNotifier {
           Duration(microseconds: echoGuardMicrosForRoute(_activeOutputRoute)),
         );
       }
-    } catch (_) {
-      _handlePlaybackFailure();
+    } catch (error) {
+      _handlePlaybackFailure(reason: error.toString());
     } finally {
       if (_isCurrentReplay(generation)) {
         _replayingTurnId = null;
@@ -2124,8 +2126,8 @@ class ConversationController extends ChangeNotifier {
   Future<void> _releasePlaybackNow() async {
     try {
       await _playback.dispose();
-    } catch (_) {
-      _handlePlaybackFailure();
+    } catch (error) {
+      _handlePlaybackFailure(reason: error.toString());
     } finally {
       _playbackConfigured = false;
       _activeOutputRoute = AudioOutputRoute.unknown;
@@ -2162,7 +2164,7 @@ class ConversationController extends ChangeNotifier {
               Duration.microsecondsPerMillisecond;
     return ConversationDiagnostics(
       phase: _phase,
-      mode: _mode,
+      mode: _diagnosticMode,
       sessionDurationMilliseconds: durationMilliseconds,
       microphoneChunksSent: _microphoneChunksSent,
       microphoneChunksSuppressed: _microphoneChunksSuppressed,

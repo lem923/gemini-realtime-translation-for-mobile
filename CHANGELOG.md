@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.34.0] - 2026-08-14
+
+### Fixed
+
+- 译音全部无法播放（三个模式均受影响）：原生播放器的 enqueue 执行器在
+  `dispose` 时被永久关闭，而 `configure` 每次都以 `dispose` 开头，导致第一次
+  配置之后所有 `enqueue`/`enqueueTrack` 都抛 `RejectedExecutionException`，
+  Dart 侧将其记为无原因的播放失败并静音整场会话。执行器现在在每次
+  `dispose` 后重建，enqueue 任务也改为始终完成 MethodChannel 结果并携带
+  错误消息。
+- 诊断报告的 `模式` 字段现在记录会话运行时的模式，而不是打开报告时的
+  当前模式（此前会把同声/讲座会话的数据显示为逐句翻译）。
+- 所有 Dart 侧播放失败路径现在把具体异常写入诊断的 `播放错误` 原因，
+  便于真机定位。
+
+### Tests
+
+- 124 Flutter tests pass; Android host tests and lint pass.
+
 ## [0.33.0] - 2026-08-14
 
 ### Changed

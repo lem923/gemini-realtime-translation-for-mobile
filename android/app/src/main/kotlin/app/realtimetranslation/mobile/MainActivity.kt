@@ -173,8 +173,16 @@ class MainActivity : FlutterActivity() {
                             result.error("invalid_audio", "PCM payload is missing", null)
                         } else {
                             pcmPlayer.mainEnqueueExecutor.execute {
-                                pcmPlayer.enqueueBlocking(bytes)
-                                result.success(null)
+                                try {
+                                    pcmPlayer.enqueueBlocking(bytes)
+                                    result.success(null)
+                                } catch (error: Throwable) {
+                                    result.error(
+                                        "audio_failure",
+                                        "enqueue failed: ${error.message}",
+                                        null,
+                                    )
+                                }
                             }
                         }
                     }
@@ -191,8 +199,16 @@ class MainActivity : FlutterActivity() {
                                 pcmPlayer.mainEnqueueExecutor
                             }
                             executor.execute {
-                                pcmPlayer.enqueueTrackBlocking(trackName, bytes)
-                                result.success(null)
+                                try {
+                                    pcmPlayer.enqueueTrackBlocking(trackName, bytes)
+                                    result.success(null)
+                                } catch (error: Throwable) {
+                                    result.error(
+                                        "audio_failure",
+                                        "enqueueTrack failed: ${error.message}",
+                                        null,
+                                    )
+                                }
                             }
                         }
                     }
@@ -367,12 +383,12 @@ private class PcmStreamPlayer(
     private var headsetQueuedBytes = 0
     private var headsetWorker: Thread? = null
     private var configuredSampleRate = 24_000
-    val mainEnqueueExecutor = java.util.concurrent.Executors.newSingleThreadExecutor {
-        Thread(it, "pcm-enqueue-main").apply { isDaemon = true }
-    }
-    val headsetEnqueueExecutor = java.util.concurrent.Executors.newSingleThreadExecutor {
-        Thread(it, "pcm-enqueue-headset").apply { isDaemon = true }
-    }
+    @Volatile
+    var mainEnqueueExecutor = newMainEnqueueExecutor()
+        private set
+    @Volatile
+    var headsetEnqueueExecutor = newHeadsetEnqueueExecutor()
+        private set
 
     fun configure(
         sampleRate: Int,
@@ -1071,6 +1087,12 @@ private class PcmStreamPlayer(
 
         mainEnqueueExecutor.shutdownNow()
         headsetEnqueueExecutor.shutdownNow()
+        // Each playback run gets fresh executors: `configure` calls
+        // `disposeLocked` first, and a shut-down executor would reject every
+        // subsequent enqueue with RejectedExecutionException, silently
+        // killing translated-audio playback for the whole app lifetime.
+        mainEnqueueExecutor = newMainEnqueueExecutor()
+        headsetEnqueueExecutor = newHeadsetEnqueueExecutor()
 
         BestEffortCleanup.run(
             { clearQueue() },
@@ -1277,6 +1299,16 @@ private class PcmStreamPlayer(
         private const val MAX_QUEUE_MILLISECONDS = 1_500
         private const val NON_BLOCKING_RETRY_MILLISECONDS = 2L
         private const val WORKER_JOIN_MILLISECONDS = 500L
+
+        private fun newMainEnqueueExecutor(): java.util.concurrent.ExecutorService =
+            java.util.concurrent.Executors.newSingleThreadExecutor {
+                Thread(it, "pcm-enqueue-main").apply { isDaemon = true }
+            }
+
+        private fun newHeadsetEnqueueExecutor(): java.util.concurrent.ExecutorService =
+            java.util.concurrent.Executors.newSingleThreadExecutor {
+                Thread(it, "pcm-enqueue-headset").apply { isDaemon = true }
+            }
     }
 
 }
