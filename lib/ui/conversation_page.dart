@@ -269,25 +269,6 @@ class _ModeSelector extends StatelessWidget {
               height: 1.3,
             ),
           ),
-        if (showHint && controller.mode == ConversationMode.sentenceBySentence)
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: <Widget>[
-              Text(
-                '语音自动修正',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: colors.onSurfaceVariant,
-                ),
-              ),
-              Switch(
-                value: controller.sentenceCorrectionEnabled,
-                onChanged: (bool value) =>
-                    controller.setSentenceCorrectionEnabled(value),
-              ),
-            ],
-          ),
       ],
     );
   }
@@ -1245,29 +1226,9 @@ class _PttDock extends StatelessWidget {
         ),
       );
     }
-    final bool pipelineBusy =
-        controller.pipelineStatus != SentencePipelineStatus.idle;
-    final String statusLabel = switch (controller.pipelineStatus) {
-      SentencePipelineStatus.recognizing => '正在识别语音…',
-      SentencePipelineStatus.correcting => '正在修正并翻译…',
-      SentencePipelineStatus.synthesizing => '正在合成译文语音…',
-      SentencePipelineStatus.playing => '正在播放译文…',
-      SentencePipelineStatus.idle => '',
-    };
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: <Widget>[
-        if (pipelineBusy) ...<Widget>[
-          Text(
-            statusLabel,
-            style: TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-              color: colors.primary,
-            ),
-          ),
-          const SizedBox(height: 8),
-        ],
         Row(
           children: <Widget>[
             Expanded(

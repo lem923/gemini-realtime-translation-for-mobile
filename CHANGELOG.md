@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.33.0] - 2026-08-14
+
+### Changed
+
+- 逐句翻译回退为纯 Live 会话路径：按住说话时，音频实时送入
+  `gemini-3.5-live-translate-preview` 翻译，译文音频在本机缓冲；松开按钮后
+  一次性播放本次译音。移除了独立 ASR 会话、REST 文本修正与系统 TTS 整条
+  管线（`gemini-3.1-flash-live-preview` ASR 会话在真机被拒绝是逐句模式
+  无法启动的根因）。删除 `语音自动修正` 开关与管线状态 UI。
+- 修复 `_audioMuted` 跨会话残留：上一个会话的播放失败/系统中断会让之后
+  每次新会话收到译文却不播放（诊断特征：`最大 Dart 排队: 0`、`播放错误: 0`、
+  文字正常）。新会话现在总是从未静音开始。
+
+### Tests
+
+- 124 Flutter tests pass; Android host tests and lint pass.
+
 ## [0.32.0] - 2026-08-14
 
 ### Fixed

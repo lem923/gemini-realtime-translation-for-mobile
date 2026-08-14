@@ -28,7 +28,6 @@ import kotlin.math.max
 class MainActivity : FlutterActivity() {
     private var player: PcmStreamPlayer? = null
     private var headsetMicCapture: HeadsetMicCapture? = null
-    private var systemTts: SystemTts? = null
     private var audioEventSink: EventChannel.EventSink? = null
     private var permissionEventSink: EventChannel.EventSink? = null
     private val permissionHandler = Handler(Looper.getMainLooper())
@@ -261,35 +260,6 @@ class MainActivity : FlutterActivity() {
                 headsetCapture.setEventSink(null)
             }
         })
-        val tts = SystemTts(context = this)
-        systemTts = tts
-        MethodChannel(
-            flutterEngine.dartExecutor.binaryMessenger,
-            "app.realtimetranslation/tts",
-        ).setMethodCallHandler { call, result ->
-            when (call.method) {
-                "synthesize" -> {
-                    val text = call.argument<String>("text")
-                    val languageCode = call.argument<String>("languageCode")
-                    if (text == null || languageCode == null) {
-                        result.error("invalid_tts", "Text or language missing", null)
-                    } else {
-                        tts.synthesize(text, languageCode) { path ->
-                            if (path == null) {
-                                result.error("tts_failure", "TTS synthesis failed", null)
-                            } else {
-                                result.success(path)
-                            }
-                        }
-                    }
-                }
-                "dispose" -> {
-                    tts.shutdown()
-                    result.success(null)
-                }
-                else -> result.notImplemented()
-            }
-        }
     }
 
     override fun onDestroy() {
@@ -300,13 +270,10 @@ class MainActivity : FlutterActivity() {
             player = null
             val currentHeadset = headsetMicCapture
             headsetMicCapture = null
-            val currentTts = systemTts
-            systemTts = null
             BestEffortCleanup.run(
                 { permissionHandler.removeCallbacks(permissionPoll) },
                 { currentPlayer?.dispose() },
                 { currentHeadset?.stop() },
-                { currentTts?.shutdown() },
             )
         } finally {
             super.onDestroy()

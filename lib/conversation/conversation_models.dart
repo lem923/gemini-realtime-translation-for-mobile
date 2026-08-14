@@ -19,15 +19,6 @@ enum ConversationMode { sentenceBySentence, simultaneous, lecture }
 /// Microphone channel used by [ConversationMode.lecture].
 enum LectureInputChannel { phoneMic, headsetMic }
 
-/// Pipeline progress of a 逐句翻译 sentence turn.
-enum SentencePipelineStatus {
-  idle,
-  recognizing,
-  correcting,
-  synthesizing,
-  playing,
-}
-
 enum ConversationPhase {
   needsKey,
   idle,
