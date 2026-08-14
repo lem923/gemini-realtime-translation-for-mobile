@@ -46,6 +46,16 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        CrashLog.install(this)
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "app.realtimetranslation/crash_log",
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "read" -> result.success(CrashLog.read(this))
+                else -> result.notImplemented()
+            }
+        }
         val pcmPlayer = PcmStreamPlayer(
             context = this,
             onInterruption = {
@@ -344,6 +354,7 @@ private class PcmStreamPlayer(
     private var headsetMaxQueuedBytes = 72_000
     private var headsetQueuedBytes = 0
     private var headsetWorker: Thread? = null
+    private var configuredSampleRate = 24_000
 
     fun configure(sampleRate: Int, clientGeneration: Long) = synchronized(lifecycleLock) {
         disposeLocked()
@@ -381,6 +392,7 @@ private class PcmStreamPlayer(
             audioTrack = track
             maxQueuedBytes = sampleRate * 2 * MAX_QUEUE_MILLISECONDS / 1_000
             headsetMaxQueuedBytes = maxQueuedBytes
+            configuredSampleRate = sampleRate
             droppedChunks = 0
             lastOutputRoute = "unknown"
             interruptionReported = false
@@ -459,16 +471,35 @@ private class PcmStreamPlayer(
     }
 
     private fun configureHeadsetLane(sampleRate: Int, run: PlaybackRunState) {
-        val headsetDevice = selectHeadsetOutputDevice()
-        if (headsetDevice == null) {
+        // The headset lane is built lazily on first use (see enqueueTrack)
+        // instead of eagerly, so a device with a hostile audio HAL cannot
+        // crash conversation startup in the other modes.
+        headsetTrack = null
+    }
+
+    @Suppress("DEPRECATION")
+    private fun ensureHeadsetLane(sampleRate: Int, run: PlaybackRunState) {
+        if (headsetTrack != null && headsetTrack?.state == AudioTrack.STATE_INITIALIZED) {
+            return
+        }
+        val headsetDevice = try {
+            selectHeadsetOutputDevice()
+        } catch (_: Throwable) {
+            null
+        } ?: run {
             headsetTrack = null
             return
         }
-        val minimum = AudioTrack.getMinBufferSize(
-            sampleRate,
-            AudioFormat.CHANNEL_OUT_MONO,
-            AudioFormat.ENCODING_PCM_16BIT,
-        )
+        val minimum = try {
+            AudioTrack.getMinBufferSize(
+                sampleRate,
+                AudioFormat.CHANNEL_OUT_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+            )
+        } catch (_: Throwable) {
+            headsetTrack = null
+            return
+        }
         val track = try {
             AudioTrack.Builder()
                 .setAudioAttributes(
@@ -495,13 +526,25 @@ private class PcmStreamPlayer(
             headsetTrack = null
             return
         }
-        if (!track.setPreferredDevice(headsetDevice)) {
+        try {
+            if (!track.setPreferredDevice(headsetDevice)) {
+                track.release()
+                headsetTrack = null
+                return
+            }
+        } catch (_: Throwable) {
+            track.release()
+            headsetTrack = null
+            return
+        }
+        try {
+            track.play()
+        } catch (_: Throwable) {
             track.release()
             headsetTrack = null
             return
         }
         headsetTrack = track
-        track.play()
         headsetWorker = thread(name = "translated-pcm-headset", isDaemon = true) {
             while (run.active && headsetTrack === track) {
                 val chunk = try {
@@ -574,6 +617,9 @@ private class PcmStreamPlayer(
                 AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
                 AudioDeviceInfo.TYPE_BLE_HEADSET,
                 AudioDeviceInfo.TYPE_HEARING_AID -> true
+                // TYPE_BLUETOOTH_A2DP is intentionally excluded: a music
+                // profile has no microphone and rejects voice-communication
+                // tracks on several OEM audio HALs.
                 else -> false
             }
         }
@@ -623,6 +669,15 @@ private class PcmStreamPlayer(
             if (trackName != "headset") return@enqueueTrack
             if (bytes.isEmpty()) return@enqueueTrack
             val run = playbackRun ?: return@enqueueTrack
+            if (headsetTrack == null || headsetTrack?.state != AudioTrack.STATE_INITIALIZED) {
+                try {
+                    ensureHeadsetLane(configuredSampleRate, run)
+                } catch (_: Throwable) {
+                    headsetTrack = null
+                    droppedChunks += 1
+                    return@enqueueTrack
+                }
+            }
             val chunk = run.chunk(bytes.copyOf()) ?: return@enqueueTrack
             val track = headsetTrack
             if (track == null || track.state != AudioTrack.STATE_INITIALIZED) {

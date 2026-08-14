@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.1] - 2026-08-14
+
+### Fixed
+
+- 耳机分离 mode could crash the app on devices with audio HALs that reject
+  voice-communication tracks for Bluetooth music (A2DP) devices. The headset
+  playback lane is now created lazily and defensively, A2DP outputs are
+  excluded, and every native audio step fails closed instead of throwing.
+- Uncaught Dart errors no longer kill the app: they are captured in a bounded
+  local crash log alongside native crashes.
+
+### Added
+
+- The diagnostics report now includes the recent local crash log (exported
+  only when the user copies the report).
+
+### Tests
+
+- 123 Flutter tests pass; Android host tests and lint pass.
+
 ## [0.23.0] - 2026-08-13
 
 ### Added

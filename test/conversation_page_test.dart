@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:realtime_translation/audio/audio_capture_gateway.dart';
 import 'package:realtime_translation/audio/headset_capture_gateway.dart';
@@ -15,6 +16,14 @@ import 'package:realtime_translation/security/api_key_store.dart';
 import 'package:realtime_translation/ui/conversation_page.dart';
 
 void main() {
+  setUp(() {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+          const MethodChannel('app.realtimetranslation/crash_log'),
+          (MethodCall call) async => '',
+        );
+  });
+
   testWidgets('switches layouts and selects a searchable language', (
     WidgetTester tester,
   ) async {

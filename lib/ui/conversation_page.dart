@@ -8,6 +8,7 @@ import '../audio/headset_capture_gateway.dart';
 import '../conversation/conversation_controller.dart';
 import '../conversation/conversation_diagnostics.dart';
 import '../conversation/conversation_models.dart';
+import '../shared/crash_log.dart';
 import '../shared/translation_language.dart';
 
 @visibleForTesting
@@ -1535,10 +1536,25 @@ Future<void> _showDiagnosticsDialog(
 ) async {
   final ConversationDiagnostics diagnostics = await controller
       .collectDiagnostics();
+  final StringBuffer report = StringBuffer(diagnostics.toRedactedText());
+  final String nativeLog = await CrashLog.instance.readNativeLog();
+  final List<String> dartEntries = CrashLog.instance.entries;
+  if (dartEntries.isNotEmpty || nativeLog.isNotEmpty) {
+    report.writeln();
+    report.writeln('本机崩溃日志（最近，仅供开发者诊断）:');
+    final int dartStart = dartEntries.length > 4 ? dartEntries.length - 4 : 0;
+    for (final String entry in dartEntries.sublist(dartStart)) {
+      report.writeln(entry.split('\n').take(4).join(' / '));
+    }
+    if (nativeLog.isNotEmpty) {
+      final List<String> lines = nativeLog.trim().split('\n');
+      final int nativeStart = lines.length > 8 ? lines.length - 8 : 0;
+      report.writeln(lines.sublist(nativeStart).join('\n'));
+    }
+  }
   if (!context.mounted) {
     return;
   }
-  final String report = diagnostics.toRedactedText();
   await showDialog<void>(
     context: context,
     builder: (BuildContext dialogContext) => AlertDialog(
@@ -1548,7 +1564,7 @@ Future<void> _showDiagnosticsDialog(
         constraints: const BoxConstraints(maxWidth: 520, maxHeight: 520),
         child: SingleChildScrollView(
           child: SelectableText(
-            report,
+            report.toString(),
             style: Theme.of(dialogContext).textTheme.bodySmall?.copyWith(
               fontFamily: 'monospace',
               height: 1.55,
@@ -1563,7 +1579,7 @@ Future<void> _showDiagnosticsDialog(
         ),
         FilledButton.icon(
           onPressed: () async {
-            await Clipboard.setData(ClipboardData(text: report));
+            await Clipboard.setData(ClipboardData(text: report.toString()));
             if (dialogContext.mounted) {
               Navigator.pop(dialogContext);
             }

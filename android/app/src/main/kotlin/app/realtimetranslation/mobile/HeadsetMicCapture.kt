@@ -40,27 +40,36 @@ internal class HeadsetMicCapture(
     }
 
     fun isAvailable(): Boolean {
-        if (
-            context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) !=
-                PackageManager.PERMISSION_GRANTED
-        ) {
-            return false
+        return try {
+            if (
+                context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) !=
+                    PackageManager.PERMISSION_GRANTED
+            ) {
+                false
+            } else {
+                findHeadsetMicDevice() != null
+            }
+        } catch (_: Throwable) {
+            false
         }
-        return findHeadsetMicDevice() != null
     }
 
     private fun findHeadsetMicDevice(): AudioDeviceInfo? {
-        val inputs = audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS)
-        return inputs.firstOrNull { device ->
-            when (device.type) {
-                AudioDeviceInfo.TYPE_WIRED_HEADSET,
-                AudioDeviceInfo.TYPE_USB_HEADSET,
-                AudioDeviceInfo.TYPE_USB_DEVICE,
-                AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
-                AudioDeviceInfo.TYPE_BLE_HEADSET,
-                AudioDeviceInfo.TYPE_HEARING_AID -> true
-                else -> false
+        return try {
+            val inputs = audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS)
+            inputs.firstOrNull { device ->
+                when (device.type) {
+                    AudioDeviceInfo.TYPE_WIRED_HEADSET,
+                    AudioDeviceInfo.TYPE_USB_HEADSET,
+                    AudioDeviceInfo.TYPE_USB_DEVICE,
+                    AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+                    AudioDeviceInfo.TYPE_BLE_HEADSET,
+                    AudioDeviceInfo.TYPE_HEARING_AID -> true
+                    else -> false
+                }
             }
+        } catch (_: Throwable) {
+            null
         }
     }
 
