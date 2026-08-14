@@ -335,7 +335,7 @@ void main() {
       expect(controller.hasApiKey, isTrue);
       expect(controller.phase, ConversationPhase.idle);
       expect(find.text('准备就绪'), findsOneWidget);
-      expect(find.text('开始翻译'), findsOneWidget);
+      expect(find.text('按住说话'), findsOneWidget);
       expect(requestedKeys.last, 'replacement-key');
 
       await tester.pumpWidget(const SizedBox.shrink());
@@ -590,6 +590,7 @@ void main() {
           },
     );
     await controller.initialize();
+    controller.setMode(ConversationMode.simultaneous);
     await controller.startConversation();
     await tester.pumpWidget(
       MaterialApp(home: ConversationPage(controller: controller)),
@@ -749,8 +750,8 @@ void main() {
       expect(theme.brightness, brightness);
       expect(theme.colorScheme.primary, expectedScheme.primary);
       expect(theme.scaffoldBackgroundColor, expectedScheme.surface);
-      expect(find.byType(FilledButton), findsOneWidget);
-      expect(find.byType(IconButton), findsNWidgets(4));
+      expect(find.text('按住说话'), findsOneWidget);
+      expect(find.byType(IconButton), findsNWidgets(5));
       expect(tester.takeException(), isNull);
 
       await tester.pumpWidget(const SizedBox.shrink());
@@ -793,7 +794,7 @@ void main() {
     );
     expect(Directionality.of(pageContext), TextDirection.rtl);
     expect(MediaQuery.textScalerOf(pageContext).scale(14), 28);
-    expect(find.text('开始翻译'), findsOneWidget);
+    expect(find.text('按住说话'), findsOneWidget);
     expect(tester.takeException(), isNull);
 
     await tester.tap(find.byTooltip('面对面模式'));

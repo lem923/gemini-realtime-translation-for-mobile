@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-08-14
+
+### Changed
+
+- 逐句翻译 is now push-to-talk only (微信式): press and hold to record, release
+  ends the sentence. Recording is fully local, so the button responds
+  immediately even before any network connect; pressing cuts any playing
+  translation.
+- 逐句翻译 no longer uses the Live Translate session. After release the app
+  runs an offline-style pipeline: ASR (gemini-2.5-pro, verified to accept
+  inline audio; flash-class models currently drop inline audio) → correct +
+  translate with the last 10 minutes of context (gemini-2.5-flash-lite) →
+  system TTS synthesized to the existing playback engine. The 语音自动修正
+  toggle controls the correction step. This also frees a Live session/quota.
+- The pipeline status (识别中/修正翻译中/合成播放中) is shown in the dock;
+  failures fall back to showing the error without blocking the app.
+
+### Tests
+
+- 124 Flutter tests pass, including push-to-talk buffering, context passing,
+  pipeline failure fallback, and mode regressions; Android host tests and
+  lint pass.
+
 ## [0.25.0] - 2026-08-14
 
 ### Changed

@@ -9,6 +9,7 @@ import '../audio/audio_constants.dart';
 import '../audio/headset_capture_gateway.dart';
 import '../audio/pcm_playback_gateway.dart';
 import '../audio/speech_activity_detector.dart';
+import '../audio/text_to_speech_gateway.dart';
 import '../live_translate/live_event.dart';
 import '../live_translate/live_translation_session.dart';
 import '../permissions/microphone_permission_gateway.dart';
@@ -17,6 +18,7 @@ import '../security/api_key_store.dart';
 import '../shared/translation_language.dart';
 import 'conversation_diagnostics.dart';
 import 'conversation_models.dart';
+import 'sentence_translator.dart';
 
 enum _PersistedKeyState { unknown, absent, present }
 
@@ -26,6 +28,8 @@ class ConversationController extends ChangeNotifier {
     AudioCaptureGateway? audioCapture,
     PcmPlaybackGateway? playback,
     HeadsetCaptureGateway? headsetCapture,
+    SentenceTranslator? sentenceTranslator,
+    TextToSpeech? textToSpeech,
     LanguagePairStore? languagePairStore,
     MicrophonePermissionGateway? permissionGateway,
     LiveSessionFactory? sessionFactory,
@@ -35,6 +39,8 @@ class ConversationController extends ChangeNotifier {
        _audioCapture = audioCapture ?? RecordAudioCaptureGateway(),
        _playback = playback ?? PlatformPcmPlaybackGateway(),
        _headsetCapture = headsetCapture ?? NativeHeadsetCaptureGateway(),
+       _sentenceTranslator = sentenceTranslator ?? RestSentenceTranslator(),
+       _textToSpeech = textToSpeech ?? TextToSpeechGateway(),
        _languagePairStore =
            languagePairStore ?? const DisabledLanguagePairStore(),
        _permissionGateway =
@@ -52,6 +58,8 @@ class ConversationController extends ChangeNotifier {
   final AudioCaptureGateway _audioCapture;
   final PcmPlaybackGateway _playback;
   final HeadsetCaptureGateway _headsetCapture;
+  final SentenceTranslator _sentenceTranslator;
+  final TextToSpeech _textToSpeech;
   final LanguagePairStore _languagePairStore;
   final MicrophonePermissionGateway _permissionGateway;
   final LiveSessionFactory _sessionFactory;
@@ -122,6 +130,7 @@ class ConversationController extends ChangeNotifier {
   int _microphoneChunksHeld = 0;
   int _utterancesDetected = 0;
   int _bargeIns = 0;
+  int _sentenceTurnsCompleted = 0;
   int _autoDirectionSwitches = 0;
   int _suppressedSpeechStreak = 0;
   int _lastBargeInMicros = -bargeInCooldownMicros;
@@ -150,6 +159,11 @@ class ConversationController extends ChangeNotifier {
     SpeakerSide.a: BytesBuilder(copy: true),
     SpeakerSide.b: BytesBuilder(copy: true),
   };
+  bool _pttActive = false;
+  BytesBuilder _pttBuffer = BytesBuilder(copy: true);
+  SentencePipelineStatus _pipelineStatus = SentencePipelineStatus.idle;
+  bool _sentenceCorrectionEnabled = true;
+  final List<SentenceContextTurn> _sentenceContext = <SentenceContextTurn>[];
   final Map<SpeakerSide, List<Uint8List>> _sentencePlaybackChunks =
       <SpeakerSide, List<Uint8List>>{
         SpeakerSide.a: <Uint8List>[],
@@ -213,6 +227,9 @@ class ConversationController extends ChangeNotifier {
   TranslationLanguage get lectureTargetLanguage => _languageB;
   HeadsetCaptureState get headsetState => _headsetState;
   bool get isHeadsetMode => _mode == ConversationMode.lecture;
+  bool get pttActive => _pttActive;
+  SentencePipelineStatus get pipelineStatus => _pipelineStatus;
+  bool get sentenceCorrectionEnabled => _sentenceCorrectionEnabled;
   TranslationLanguage get languageA => _languageA;
   TranslationLanguage get languageB => _languageB;
   TranslationLanguage get activeSourceLanguage =>
@@ -471,10 +488,12 @@ class ConversationController extends ChangeNotifier {
       }
       // The user may switch the selected speaker while native capture is
       // starting. Re-check the latest direction before accepting any frame.
-      await _ensureSelectedSession(generation);
-      if (!_isCurrentConversation(generation)) {
-        await _audioCapture.stop();
-        return;
+      if (_mode != ConversationMode.sentenceBySentence) {
+        await _ensureSelectedSession(generation);
+        if (!_isCurrentConversation(generation)) {
+          await _audioCapture.stop();
+          return;
+        }
       }
       var captureTerminated = false;
       void handleCaptureTermination(String message) {
@@ -736,6 +755,17 @@ class ConversationController extends ChangeNotifier {
       }
       return;
     }
+    if (_mode == ConversationMode.sentenceBySentence) {
+      // Push-to-talk: while the button is held, forwarded speech is recorded
+      // locally (no live session needed); release runs the offline pipeline.
+      if (_pttActive && decision == SpeechGateDecision.forward) {
+        _pttBuffer.add(chunk);
+      } else if (decision == SpeechGateDecision.hold ||
+          decision == SpeechGateDecision.finalize) {
+        _microphoneChunksHeld += 1;
+      }
+      return;
+    }
     final bool echoGuarded =
         _mode == ConversationMode.sentenceBySentence &&
         (_playbackFlushesInFlight > 0 || now < _captureBlockedUntilMicros);
@@ -811,6 +841,162 @@ class ConversationController extends ChangeNotifier {
       case SpeechGateDecision.forward:
         _sendMicrophoneChunk(session!, chunk);
     }
+  }
+
+  void setSentenceCorrectionEnabled(bool enabled) {
+    if (_sentenceCorrectionEnabled == enabled || _disposed) {
+      return;
+    }
+    _sentenceCorrectionEnabled = enabled;
+    notifyListeners();
+  }
+
+  /// Push-to-talk: press starts local recording (the conversation auto-starts
+  /// without waiting for any network connect), release finalizes the turn.
+  void startUtterance() {
+    if (_disposed || _pttActive) {
+      return;
+    }
+    if (!hasApiKey ||
+        _phase == ConversationPhase.needsKey ||
+        _phase == ConversationPhase.permissionDenied) {
+      return;
+    }
+    if (!isListening) {
+      unawaited(startConversation());
+    }
+    if (_replayingTurnId != null || _replayOperation != null) {
+      unawaited(stopReplay());
+    }
+    _pttActive = true;
+    _pttBuffer = BytesBuilder(copy: true);
+    _errorMessage = null;
+    // Cut any translation still playing so the new utterance wins.
+    unawaited(_flushPlayback());
+    notifyListeners();
+  }
+
+  void endUtterance() {
+    if (!_pttActive) {
+      return;
+    }
+    _pttActive = false;
+    notifyListeners();
+    final Uint8List audio = _pttBuffer.takeBytes();
+    _pttBuffer = BytesBuilder(copy: true);
+    if (audio.isEmpty) {
+      return;
+    }
+    unawaited(_runSentencePipeline(audio));
+  }
+
+  Future<void> _runSentencePipeline(Uint8List audio) async {
+    if (_disposed) {
+      return;
+    }
+    _pipelineStatus = SentencePipelineStatus.recognizing;
+    notifyListeners();
+    try {
+      final SentenceTextTranslation texts = await _sentenceTranslator.translate(
+        apiKey: _apiKey,
+        pcm: audio,
+        source: activeSourceLanguage,
+        target: activeTargetLanguage,
+        context: _sentenceContext
+            .where(
+              (SentenceContextTurn turn) =>
+                  DateTime.now().difference(turn.createdAt).inMinutes < 10,
+            )
+            .toList(growable: false),
+      );
+      if (_disposed) {
+        return;
+      }
+      _pipelineStatus = SentencePipelineStatus.synthesizing;
+      notifyListeners();
+      final Uint8List? pcm = await _textToSpeech.synthesize(
+        text: texts.translatedText,
+        languageCode: activeTargetLanguage.code,
+      );
+      if (_disposed) {
+        return;
+      }
+      _sentenceContext.add(
+        SentenceContextTurn(
+          sourceLanguageCode: activeSourceLanguage.code,
+          sourceText: texts.sourceText,
+          translatedText: texts.translatedText,
+          createdAt: DateTime.now(),
+        ),
+      );
+      while (_sentenceContext.length > 30) {
+        _sentenceContext.removeAt(0);
+      }
+      _commitSentenceTurn(texts.sourceText, texts.translatedText, pcm);
+      if (pcm != null && !_audioMuted) {
+        _pipelineStatus = SentencePipelineStatus.playing;
+        notifyListeners();
+        await _playPipelinePcm(pcm);
+      }
+    } on Object catch (error) {
+      if (!_disposed) {
+        _errorMessage = '逐句翻译失败：$error';
+        notifyListeners();
+      }
+    } finally {
+      if (!_disposed) {
+        _pipelineStatus = SentencePipelineStatus.idle;
+        notifyListeners();
+      }
+    }
+  }
+
+  Future<void> _playPipelinePcm(Uint8List pcm) async {
+    const int chunkBytes = 4800;
+    for (int offset = 0; offset < pcm.length; offset += chunkBytes) {
+      if (_disposed || _playbackFailureReported) {
+        return;
+      }
+      final int end = (offset + chunkBytes).clamp(0, pcm.length);
+      _queuePlayback(Uint8List.sublistView(pcm, offset, end));
+      await _waitForPlayback();
+    }
+  }
+
+  void _commitSentenceTurn(
+    String sourceText,
+    String translatedText,
+    Uint8List? audio,
+  ) {
+    final SpeakerSide side = _activeSpeaker;
+    final int turnId = ++_turnId;
+    _turns.add(
+      ConversationTurn(
+        id: turnId,
+        speaker: side,
+        sourceLanguage: activeSourceLanguage,
+        targetLanguage: activeTargetLanguage,
+        sourceText: sourceText,
+        translatedText: translatedText,
+        createdAt: DateTime.now(),
+      ),
+    );
+    if (audio != null && audio.isNotEmpty) {
+      _storeReplayAudio(turnId, audio);
+    }
+    while (_turns.length > maxHistoryTurns) {
+      final List<ConversationTurn> removed = _turns.sublist(
+        0,
+        _turns.length - maxHistoryTurns,
+      );
+      for (final ConversationTurn turn in removed) {
+        _removeReplayAudio(turn.id);
+      }
+      _turns.removeRange(0, removed.length);
+    }
+    _diagnosticCompletedTurns += 1;
+    _sentenceTurnsCompleted += 1;
+    notifyListeners();
   }
 
   void _sendMicrophoneChunk(LiveTranslationSession session, Uint8List chunk) {
@@ -1777,6 +1963,8 @@ class ConversationController extends ChangeNotifier {
       // A broken transport must not prevent local media cleanup.
     }
     _commitTurn(_activeSpeaker);
+    _pttActive = false;
+    _pipelineStatus = SentencePipelineStatus.idle;
     _clearAllSentencePlayback();
     final StreamSubscription<Uint8List>? captureSubscription =
         _captureSubscription;
@@ -2059,6 +2247,7 @@ class ConversationController extends ChangeNotifier {
       microphoneChunksHeld: _microphoneChunksHeld,
       utterancesDetected: _utterancesDetected,
       bargeIns: _bargeIns,
+      sentenceTurnsCompleted: _sentenceTurnsCompleted,
       autoDirectionSwitches: _autoDirectionSwitches,
       headsetState: _headsetState.name,
       outputAudioChunks: _outputAudioChunks,
@@ -2100,6 +2289,7 @@ class ConversationController extends ChangeNotifier {
     _microphoneChunksHeld = 0;
     _utterancesDetected = 0;
     _bargeIns = 0;
+    _sentenceTurnsCompleted = 0;
     _autoDirectionSwitches = 0;
     _outputAudioChunks = 0;
     _outputAudioBytes = 0;

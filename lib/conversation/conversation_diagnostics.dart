@@ -14,6 +14,7 @@ class ConversationDiagnostics {
     required this.microphoneChunksHeld,
     required this.utterancesDetected,
     required this.bargeIns,
+    required this.sentenceTurnsCompleted,
     required this.autoDirectionSwitches,
     required this.headsetState,
     required this.outputAudioChunks,
@@ -46,6 +47,7 @@ class ConversationDiagnostics {
   final int microphoneChunksHeld;
   final int utterancesDetected;
   final int bargeIns;
+  final int sentenceTurnsCompleted;
   final int autoDirectionSwitches;
   final String headsetState;
   final int outputAudioChunks;
@@ -81,6 +83,7 @@ class ConversationDiagnostics {
       '静音停发块: $microphoneChunksHeld',
       '检测到发言: $utterancesDetected',
       '抢话中断: $bargeIns',
+      '逐句完成轮次: $sentenceTurnsCompleted',
       '自动方向切换: $autoDirectionSwitches',
       '耳机状态: $headsetState',
       '译音块 / 字节: $outputAudioChunks / $outputAudioBytes',

@@ -269,6 +269,25 @@ class _ModeSelector extends StatelessWidget {
               height: 1.3,
             ),
           ),
+        if (showHint && controller.mode == ConversationMode.sentenceBySentence)
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: <Widget>[
+              Text(
+                '语音自动修正',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: colors.onSurfaceVariant,
+                ),
+              ),
+              Switch(
+                value: controller.sentenceCorrectionEnabled,
+                onChanged: (bool value) =>
+                    controller.setSentenceCorrectionEnabled(value),
+              ),
+            ],
+          ),
       ],
     );
   }
@@ -1088,12 +1107,15 @@ class _ControlDock extends StatelessWidget {
   Widget build(BuildContext context) {
     final ColorScheme colors = Theme.of(context).colorScheme;
     final bool busy = controller.isBusy;
+    final bool pttMode = controller.mode == ConversationMode.sentenceBySentence;
     final String label = !controller.hasApiKey
         ? '设置 API Key'
         : controller.phase == ConversationPhase.permissionDenied
         ? '打开麦克风设置'
         : controller.replayingTurnId != null
         ? '正在回放译音…'
+        : pttMode
+        ? '停止翻译'
         : controller.isListening
         ? '停止翻译'
         : controller.canStopConversation &&
@@ -1136,36 +1158,150 @@ class _ControlDock extends StatelessWidget {
             ),
           ],
         ),
-        child: SizedBox(
-          height: 58,
-          child: FilledButton.icon(
-            onPressed: busy && !controller.canStopConversation
-                ? null
-                : () {
-                    if (!controller.hasApiKey) {
-                      onNeedsKey();
-                    } else if (controller.phase ==
-                        ConversationPhase.permissionDenied) {
-                      unawaited(controller.openMicrophoneSettings());
-                    } else if (controller.canStopConversation) {
-                      unawaited(controller.stopConversation());
-                    } else {
-                      unawaited(controller.startConversation());
-                    }
-                  },
-            icon: busy
-                ? const SizedBox.square(
-                    dimension: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : Icon(icon),
-            label: Text(
-              label,
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-            ),
+        child: pttMode
+            ? _PttDock(controller: controller, onNeedsKey: onNeedsKey)
+            : SizedBox(
+                height: 58,
+                child: FilledButton.icon(
+                  onPressed: busy && !controller.canStopConversation
+                      ? null
+                      : () {
+                          if (!controller.hasApiKey) {
+                            onNeedsKey();
+                          } else if (controller.phase ==
+                              ConversationPhase.permissionDenied) {
+                            unawaited(controller.openMicrophoneSettings());
+                          } else if (controller.canStopConversation) {
+                            unawaited(controller.stopConversation());
+                          } else {
+                            unawaited(controller.startConversation());
+                          }
+                        },
+                  icon: busy
+                      ? const SizedBox.square(
+                          dimension: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : Icon(icon),
+                  label: Text(
+                    label,
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ),
+      ),
+    );
+  }
+}
+
+class _PttDock extends StatelessWidget {
+  const _PttDock({required this.controller, required this.onNeedsKey});
+
+  final ConversationController controller;
+  final VoidCallback onNeedsKey;
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme colors = Theme.of(context).colorScheme;
+    if (!controller.hasApiKey) {
+      return SizedBox(
+        height: 58,
+        child: FilledButton.icon(
+          onPressed: onNeedsKey,
+          icon: const Icon(Icons.key_rounded),
+          label: const Text(
+            '设置 API Key',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
           ),
         ),
-      ),
+      );
+    }
+    if (controller.phase == ConversationPhase.permissionDenied) {
+      return SizedBox(
+        height: 58,
+        child: FilledButton.icon(
+          onPressed: () => unawaited(controller.openMicrophoneSettings()),
+          icon: const Icon(Icons.settings_outlined),
+          label: const Text(
+            '打开麦克风设置',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+          ),
+        ),
+      );
+    }
+    final bool pipelineBusy =
+        controller.pipelineStatus != SentencePipelineStatus.idle;
+    final String statusLabel = switch (controller.pipelineStatus) {
+      SentencePipelineStatus.recognizing => '正在识别语音…',
+      SentencePipelineStatus.correcting => '正在修正并翻译…',
+      SentencePipelineStatus.synthesizing => '正在合成译文语音…',
+      SentencePipelineStatus.playing => '正在播放译文…',
+      SentencePipelineStatus.idle => '',
+    };
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        if (pipelineBusy) ...<Widget>[
+          Text(
+            statusLabel,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: colors.primary,
+            ),
+          ),
+          const SizedBox(height: 8),
+        ],
+        Row(
+          children: <Widget>[
+            Expanded(
+              child: Semantics(
+                button: true,
+                label: controller.pttActive ? '松开结束说话' : '按住说话',
+                excludeSemantics: true,
+                child: GestureDetector(
+                  onTapDown: (_) => controller.startUtterance(),
+                  onTapUp: (_) => controller.endUtterance(),
+                  onTapCancel: controller.endUtterance,
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 120),
+                    height: 58,
+                    decoration: BoxDecoration(
+                      color: controller.pttActive
+                          ? colors.primary
+                          : colors.primary.withValues(alpha: 0.14),
+                      borderRadius: BorderRadius.circular(26),
+                      border: Border.all(color: colors.primary, width: 1.5),
+                    ),
+                    alignment: Alignment.center,
+                    child: Text(
+                      controller.pttActive ? '松开结束' : '按住说话',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                        color: controller.pttActive
+                            ? colors.onPrimary
+                            : colors.primary,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            IconButton.filledTonal(
+              tooltip: '停止翻译',
+              onPressed: controller.canStopConversation
+                  ? () => unawaited(controller.stopConversation())
+                  : null,
+              icon: const Icon(Icons.stop_rounded),
+            ),
+          ],
+        ),
+      ],
     );
   }
 }
