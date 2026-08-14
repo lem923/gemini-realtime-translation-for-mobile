@@ -827,6 +827,91 @@ void main() {
   });
 
   test(
+    'graceful stop lets queued translated audio play out before release',
+    () async {
+      final _FakeAudioCapture capture = _FakeAudioCapture();
+      final _FakePlayback playback = _FakePlayback();
+      final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
+      final ConversationController controller = ConversationController(
+        keyStore: _MemoryKeyStore('stored-key'),
+        audioCapture: capture,
+        playback: playback,
+        headsetCapture: _FakeHeadsetCapture(),
+        tailGraceDuration: Duration.zero,
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) {
+              final _FakeLiveSession session = _FakeLiveSession();
+              sessions.add(session);
+              return session;
+            },
+      );
+
+      await controller.initialize();
+      controller.setMode(ConversationMode.simultaneous);
+      await controller.startConversation();
+      sessions.first.emit(LiveAudioChunk(Uint8List(4800)));
+      await _flushEvents();
+      expect(playback.enqueued, hasLength(1));
+
+      final Future<void> stopping = controller.stopConversation(
+        drainPlayback: true,
+      );
+      await _flushEvents();
+      expect(playback.disposeCount, 0);
+
+      await stopping;
+      expect(playback.disposeCount, 1);
+      expect(playback.enqueued, hasLength(1));
+      expect(controller.phase, ConversationPhase.idle);
+      controller.dispose();
+    },
+  );
+
+  test(
+    'graceful stop accepts the final audio chunks after the stop boundary',
+    () async {
+      final _FakePlayback playback = _FakePlayback();
+      final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
+      final ConversationController controller = ConversationController(
+        keyStore: _MemoryKeyStore('stored-key'),
+        audioCapture: _FakeAudioCapture(),
+        playback: playback,
+        headsetCapture: _FakeHeadsetCapture(),
+        tailGraceDuration: const Duration(milliseconds: 100),
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) {
+              final _FakeLiveSession session = _FakeLiveSession();
+              sessions.add(session);
+              return session;
+            },
+      );
+
+      await controller.initialize();
+      controller.setMode(ConversationMode.simultaneous);
+      await controller.startConversation();
+      sessions.first
+        ..emit(const LiveInputTranscript('hello', 'en'))
+        ..emit(const LiveOutputTranscript('你好', 'zh-Hans'));
+      await _flushEvents();
+
+      final Future<void> stopping = controller.stopConversation(
+        drainPlayback: true,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      sessions.first
+        ..emit(LiveAudioChunk(Uint8List(4800)))
+        ..emit(const LiveTurnComplete());
+      await stopping;
+
+      expect(playback.enqueued, hasLength(1));
+      expect(playback.disposeCount, 1);
+      expect(controller.turns, hasLength(1));
+      expect(controller.turns.single.sourceText, 'hello');
+      controller.dispose();
+    },
+  );
+
+  test(
     'speaker switch flushes stale translation and reopens the new direction',
     () async {
       int nowMicros = 0;

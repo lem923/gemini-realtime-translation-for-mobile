@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-08-14
+
+### Fixed
+
+- 译文最后几个单词不播放（逐句/同声）：用户按停止时，排队的译音立即被
+  丢弃。现在用户主动停止会进入有界优雅收尾：先停麦克风与会话边界，
+  再接受模型最后一段译音（约 1.5 秒宽限），等 Dart 入队链与原生队列
+  播完后才释放播放器（总时长有 2 秒上限，停止永远能完成）。模式切换、
+  方向切换、权限撤销等内部停止仍立即切断。
+- 播放失败自动恢复不再在会话已停止时重建播放器。
+
+### Tests
+
+- 126 Flutter tests pass; Android host tests and lint pass.
+
 ## [0.34.0] - 2026-08-14
 
 ### Fixed

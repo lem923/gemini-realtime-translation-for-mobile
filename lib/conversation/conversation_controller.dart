@@ -31,6 +31,7 @@ class ConversationController extends ChangeNotifier {
     LiveSessionFactory? sessionFactory,
     int Function()? monotonicMicros,
     this.cleanupTimeout = const Duration(seconds: 2),
+    this.tailGraceDuration = const Duration(milliseconds: 1500),
   }) : _keyStore = keyStore ?? SecureApiKeyStore(),
        _audioCapture = audioCapture ?? RecordAudioCaptureGateway(),
        _playback = playback ?? PlatformPcmPlaybackGateway(),
@@ -58,6 +59,8 @@ class ConversationController extends ChangeNotifier {
   final int Function() _monotonicMicros;
   @visibleForTesting
   final Duration cleanupTimeout;
+  final Duration tailGraceDuration;
+  bool _tailGraceActive = false;
   final Map<SpeakerSide, LiveTranslationSession> _sessions =
       <SpeakerSide, LiveTranslationSession>{};
   SpeechActivityDetector _speechDetector = SpeechActivityDetector();
@@ -641,6 +644,7 @@ class ConversationController extends ChangeNotifier {
       unawaited(
         _stopConversationWithOutcome(
           preserveError: true,
+          drainPlayback: false,
           finalPhase: ConversationPhase.permissionDenied,
           finalError: message,
         ),
@@ -700,8 +704,17 @@ class ConversationController extends ChangeNotifier {
       session = createdSession;
       _sessions[side] = session;
       _sessionSubscriptions[side] = session.events.listen((LiveEvent event) {
-        if (_isCurrentConversation(generation) &&
-            identical(_sessions[side], createdSession)) {
+        if (!identical(_sessions[side], createdSession)) {
+          return;
+        }
+        if (_isCurrentConversation(generation)) {
+          _handleLiveEvent(side, event);
+          return;
+        }
+        // During a graceful stop, the model's final audio still plays out:
+        // accept only the audio tail and the turn completion.
+        if (_tailGraceActive &&
+            (event is LiveAudioChunk || event is LiveTurnComplete)) {
           _handleLiveEvent(side, event);
         }
       });
@@ -1296,7 +1309,10 @@ class ConversationController extends ChangeNotifier {
 
   Future<void> _recoverPlaybackOnce() async {
     await Future<void>.delayed(const Duration(milliseconds: 800));
-    if (_disposed || !_playbackFailureReported) {
+    if (_disposed ||
+        !_playbackFailureReported ||
+        _stopOperation != null ||
+        _captureSubscription == null) {
       return;
     }
     _playbackFailureReported = false;
@@ -1797,12 +1813,19 @@ class ConversationController extends ChangeNotifier {
   bool _isCurrentReplay(int generation) =>
       !_disposed && generation == _replayGeneration;
 
-  Future<void> stopConversation({bool preserveError = false}) {
-    return _stopConversationWithOutcome(preserveError: preserveError);
+  Future<void> stopConversation({
+    bool preserveError = false,
+    bool drainPlayback = false,
+  }) {
+    return _stopConversationWithOutcome(
+      preserveError: preserveError,
+      drainPlayback: drainPlayback,
+    );
   }
 
   Future<void> _stopConversationWithOutcome({
     required bool preserveError,
+    required bool drainPlayback,
     ConversationPhase? finalPhase,
     String? finalError,
   }) {
@@ -1823,6 +1846,7 @@ class ConversationController extends ChangeNotifier {
         operationCompleter: operationCompleter,
         operation: operation,
         preserveError: preserveError,
+        drainPlayback: drainPlayback,
       ),
     );
     return operation;
@@ -1832,11 +1856,15 @@ class ConversationController extends ChangeNotifier {
     required Completer<void> operationCompleter,
     required Future<void> operation,
     required bool preserveError,
+    required bool drainPlayback,
   }) async {
     Object? failure;
     StackTrace? failureStackTrace;
     try {
-      await _stopConversationInternal(preserveError: preserveError);
+      await _stopConversationInternal(
+        preserveError: preserveError,
+        drainPlayback: drainPlayback,
+      );
     } catch (error, stackTrace) {
       failure = error;
       failureStackTrace = stackTrace;
@@ -1872,13 +1900,18 @@ class ConversationController extends ChangeNotifier {
     }
   }
 
-  Future<void> _stopConversationInternal({required bool preserveError}) async {
+  Future<void> _stopConversationInternal({
+    required bool preserveError,
+    required bool drainPlayback,
+  }) async {
     // Invalidate every producer synchronously before the first await. This is
     // the user-visible stop boundary: no slow playback flush or socket close
     // may allow another microphone frame into the transport.
     _conversationGeneration += 1;
     _cancelReplayState();
-    _invalidatePlaybackOperations();
+    if (!drainPlayback) {
+      _invalidatePlaybackOperations();
+    }
     if (_diagnosticStartedMicros != null) {
       _diagnosticStoppedMicros ??= _monotonicMicros();
     }
@@ -1889,7 +1922,9 @@ class ConversationController extends ChangeNotifier {
     }
     _commitTurn(_activeSpeaker);
     _pttActive = false;
-    _clearAllSentencePlayback();
+    if (!drainPlayback) {
+      _clearAllSentencePlayback();
+    }
     final StreamSubscription<Uint8List>? captureSubscription =
         _captureSubscription;
     _captureSubscription = null;
@@ -1897,17 +1932,26 @@ class ConversationController extends ChangeNotifier {
         _headsetSubscription;
     _headsetSubscription = null;
 
-    // Start independent cleanup owners together. Playback dispose is the
-    // authoritative native stop/flush/release path and intentionally bypasses
-    // an old serialized enqueue chain that may never complete.
+    // Stop the producers first; playback and the session socket are released
+    // after a bounded drain so the final words play out.
     await Future.wait(<Future<void>>[
       _cancelSubscriptionBestEffort(captureSubscription),
       _cancelSubscriptionBestEffort(headsetSubscription),
       _runAuthoritativeCleanup(_audioCapture.stop),
       _runAuthoritativeCleanup(_headsetCapture.stop),
-      _closeSessionsBestEffort(),
-      _runAuthoritativeCleanup(_releasePlayback),
     ]);
+    if (drainPlayback) {
+      await _drainPlaybackGracefully();
+      _clearAllSentencePlayback();
+      _invalidatePlaybackOperations();
+      await _closeSessionsBestEffort();
+      await _runAuthoritativeCleanup(_releasePlayback);
+    } else {
+      await Future.wait(<Future<void>>[
+        _closeSessionsBestEffort(),
+        _runAuthoritativeCleanup(_releasePlayback),
+      ]);
+    }
 
     final bool effectivePreserveError =
         preserveError || _pendingStopPreserveError;
@@ -1926,6 +1970,37 @@ class ConversationController extends ChangeNotifier {
     }
   }
 
+  /// Bounded graceful tail: accept the model's final audio for [tailGraceDuration],
+  /// then let the enqueue chain and the native queue play out before teardown.
+  /// Every phase is bounded so an explicit stop always completes.
+  Future<void> _drainPlaybackGracefully() async {
+    _tailGraceActive = true;
+    try {
+      await Future<void>.delayed(tailGraceDuration);
+    } finally {
+      _tailGraceActive = false;
+    }
+    try {
+      await _waitForPlayback().timeout(_stopDrainTimeout);
+    } catch (_) {
+      // A stuck enqueue chain must not delay the authoritative teardown.
+    }
+    final Stopwatch stopwatch = Stopwatch()..start();
+    while (stopwatch.elapsed < _stopDrainTimeout) {
+      try {
+        final PcmPlaybackMetrics metrics = await _playback.metrics();
+        if (metrics.queuedBytes <= 0) {
+          return;
+        }
+      } catch (_) {
+        return;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+  }
+
+  static const Duration _stopDrainTimeout = Duration(seconds: 2);
+
   void _terminateConversation(
     String message, {
     ConversationPhase phase = ConversationPhase.failed,
@@ -1942,6 +2017,7 @@ class ConversationController extends ChangeNotifier {
     unawaited(
       _stopConversationWithOutcome(
         preserveError: true,
+        drainPlayback: false,
         finalPhase: phase,
         finalError: message,
       ),
@@ -1985,6 +2061,7 @@ class ConversationController extends ChangeNotifier {
     final List<Object?> results = await Future.wait<Object?>(<Future<Object?>>[
       _stopConversationWithOutcome(
         preserveError: true,
+        drainPlayback: false,
         finalPhase: ConversationPhase.needsKey,
         finalError: message,
       ).then<Object?>((_) => null, onError: (Object _, StackTrace _) => null),

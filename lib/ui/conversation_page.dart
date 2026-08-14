@@ -1153,7 +1153,9 @@ class _ControlDock extends StatelessWidget {
                               ConversationPhase.permissionDenied) {
                             unawaited(controller.openMicrophoneSettings());
                           } else if (controller.canStopConversation) {
-                            unawaited(controller.stopConversation());
+                            unawaited(
+                              controller.stopConversation(drainPlayback: true),
+                            );
                           } else {
                             unawaited(controller.startConversation());
                           }
@@ -1269,7 +1271,9 @@ class _PttDock extends StatelessWidget {
             IconButton.filledTonal(
               tooltip: '停止翻译',
               onPressed: controller.canStopConversation
-                  ? () => unawaited(controller.stopConversation())
+                  ? () => unawaited(
+                      controller.stopConversation(drainPlayback: true),
+                    )
                   : null,
               icon: const Icon(Icons.stop_rounded),
             ),
