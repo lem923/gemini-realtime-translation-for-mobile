@@ -1014,6 +1014,7 @@ void main() {
         playback: playback,
         headsetCapture: _FakeHeadsetCapture(),
         tailGraceDuration: const Duration(milliseconds: 200),
+        tailPlaybackMargin: Duration.zero,
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
               final _FakeLiveSession session = _FakeLiveSession();
@@ -1034,11 +1035,14 @@ void main() {
       );
       await _flushEvents();
       expect(playback.disposeCount, 0);
-
+      // The stop itself completes immediately (phase transitions below);
+      // the tail plays out in the background.
       await stopping;
+      expect(controller.phase, ConversationPhase.idle);
+
+      await _waitForBackgroundTail();
       expect(playback.disposeCount, 1);
       expect(playback.enqueued, hasLength(1));
-      expect(controller.phase, ConversationPhase.idle);
       controller.dispose();
     },
   );
@@ -1053,6 +1057,7 @@ void main() {
         playback: playback,
         headsetCapture: _FakeHeadsetCapture(),
         tailGraceDuration: Duration.zero,
+        tailPlaybackMargin: Duration.zero,
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) =>
                 _FakeLiveSession(),
@@ -1067,11 +1072,12 @@ void main() {
         drainPlayback: true,
       );
       await _flushEvents();
-      // The queue is empty but the track buffer is not: keep waiting.
+      // The stop completes immediately; the player is still draining.
       expect(playback.disposeCount, 0);
+      await stopping;
 
       playback.pendingPlaybackBytes = 0;
-      await stopping;
+      await _waitForBackgroundTail();
       expect(playback.disposeCount, 1);
       controller.dispose();
     },
@@ -1088,6 +1094,7 @@ void main() {
         playback: playback,
         headsetCapture: _FakeHeadsetCapture(),
         tailGraceDuration: const Duration(milliseconds: 100),
+        tailPlaybackMargin: Duration.zero,
         sessionFactory:
             ({required String apiKey, required String targetLanguageCode}) {
               final _FakeLiveSession session = _FakeLiveSession();
@@ -1114,6 +1121,7 @@ void main() {
       await stopping;
 
       expect(playback.enqueued, hasLength(1));
+      await _waitForBackgroundTail();
       expect(playback.disposeCount, 1);
       expect(controller.turns, hasLength(1));
       expect(controller.turns.single.sourceText, 'hello');
@@ -2985,6 +2993,16 @@ Uint8List _translatedChunk(int marker) =>
     Uint8List.fromList(List<int>.filled(4800, marker));
 
 Future<void> _flushEvents() => Future<void>.delayed(Duration.zero);
+
+/// Lets the background tail-playback task (started by a graceful stop)
+/// finish; with zero or short grace it completes after a few event-loop
+/// turns plus the queued-audio wait, which the fake playback drains fast.
+Future<void> _waitForBackgroundTail() async {
+  for (int i = 0; i < 40; i += 1) {
+    await _flushEvents();
+    await Future<void>.delayed(const Duration(milliseconds: 5));
+  }
+}
 
 class _MemoryKeyStore implements ApiKeyStore {
   _MemoryKeyStore([this.value]);

@@ -32,6 +32,7 @@ class ConversationController extends ChangeNotifier {
     int Function()? monotonicMicros,
     this.cleanupTimeout = const Duration(seconds: 2),
     this.tailGraceDuration = const Duration(milliseconds: 2000),
+    this.tailPlaybackMargin = const Duration(seconds: 2),
   }) : _keyStore = keyStore ?? SecureApiKeyStore(),
        _audioCapture = audioCapture ?? RecordAudioCaptureGateway(),
        _playback = playback ?? PlatformPcmPlaybackGateway(),
@@ -60,8 +61,10 @@ class ConversationController extends ChangeNotifier {
   @visibleForTesting
   final Duration cleanupTimeout;
   final Duration tailGraceDuration;
+  final Duration tailPlaybackMargin;
   bool _tailGraceActive = false;
   bool _tailTurnComplete = false;
+  bool _tailPlaybackActive = false;
   int _tailLastAudioMicros = 0;
   final Map<SpeakerSide, LiveTranslationSession> _sessions =
       <SpeakerSide, LiveTranslationSession>{};
@@ -447,6 +450,15 @@ class ConversationController extends ChangeNotifier {
     _clearAllSentencePlayback();
     _suppressedSpeechStreak = 0;
     _lastBargeInMicros = -bargeInCooldownMicros;
+    // A previous stop may still be playing out its translation in the
+    // background; a fresh conversation cancels that tail so the new audio
+    // starts immediately on a clean player.
+    if (_tailPlaybackActive) {
+      _tailPlaybackActive = false;
+      _invalidatePlaybackOperations();
+      await _flushPlayback();
+      await _releasePlayback();
+    }
     notifyListeners();
     try {
       final bool permissionGranted = await _audioCapture.hasPermission();
@@ -1722,6 +1734,14 @@ class ConversationController extends ChangeNotifier {
         _stopOperation != null) {
       return;
     }
+    // A stopped conversation may still be playing its tail in the
+    // background; replay takes over the player instead.
+    if (_tailPlaybackActive) {
+      _tailPlaybackActive = false;
+      _invalidatePlaybackOperations();
+      await _flushPlayback();
+      await _releasePlayback();
+    }
     final int generation = ++_replayGeneration;
     _replayingTurnId = turnId;
     _errorMessage = null;
@@ -1814,7 +1834,8 @@ class ConversationController extends ChangeNotifier {
       if (_isCurrentReplay(generation)) {
         if (releaseWhenComplete) {
           // The full cached translation must play out before the player is
-          // released; the flush only drops what is left after cancellation.
+          // released. The wait is derived from the queued audio duration,
+          // so the tail never gets cut by an early timeout.
           final Duration replayDuration =
               Duration(
                 microseconds:
@@ -1822,14 +1843,18 @@ class ConversationController extends ChangeNotifier {
                     Duration.microsecondsPerSecond ~/
                     (outputSampleRateHz * bytesPerSample),
               ) +
-              const Duration(seconds: 5);
-          await _drainPendingPlayback(
-            shouldContinue: () =>
-                _isCurrentReplay(generation) &&
-                !_playbackFailureReported &&
-                !_disposed,
-            hardCap: replayDuration,
-          );
+              const Duration(seconds: 3);
+          Duration wait = replayDuration;
+          if (wait > _tailDrainCapMax) {
+            wait = _tailDrainCapMax;
+          }
+          final Stopwatch stopwatch = Stopwatch()..start();
+          while (stopwatch.elapsed < wait &&
+              _isCurrentReplay(generation) &&
+              !_playbackFailureReported &&
+              !_disposed) {
+            await Future<void>.delayed(const Duration(milliseconds: 100));
+          }
           await _flushPlayback();
           await _releasePlayback();
         }
@@ -1973,11 +1998,11 @@ class ConversationController extends ChangeNotifier {
       _runAuthoritativeCleanup(_headsetCapture.stop),
     ]);
     if (drainPlayback) {
-      await _drainPlaybackGracefully();
-      _clearAllSentencePlayback();
-      _invalidatePlaybackOperations();
-      await _closeSessionsBestEffort();
-      await _runAuthoritativeCleanup(_releasePlayback);
+      // The stop itself completes immediately (phase transition below);
+      // the already-queued translation plays out in the background.
+      final int drainGeneration = _playbackGeneration;
+      _tailPlaybackActive = true;
+      unawaited(_playTailAndRelease(drainGeneration));
     } else {
       await Future.wait(<Future<void>>[
         _closeSessionsBestEffort(),
@@ -2002,16 +2027,18 @@ class ConversationController extends ChangeNotifier {
     }
   }
 
-  /// Bounded graceful tail: keep accepting the model's final audio until the
-  /// response completes (turn complete, or no audio for [tailGraceDuration]),
-  /// then let the enqueue chain and the native queues plus AudioTrack buffers
-  /// play out before teardown. Every phase is bounded so an explicit stop
-  /// always completes.
-  Future<void> _drainPlaybackGracefully() async {
-    _tailGraceActive = true;
-    _tailTurnComplete = false;
-    _tailLastAudioMicros = _monotonicMicros();
+  /// Plays out the already-queued translation after a stop and then releases
+  /// the player. The wait is derived from the scheduled playback end (the
+  /// exact amount of audio queued), so it never depends on polling the
+  /// native metrics and never cuts the tail short. A new conversation bumps
+  /// [_playbackGeneration], which cancels this task.
+  Future<void> _playTailAndRelease(int generation) async {
     try {
+      // Accept the model's remaining audio briefly, then wait for the
+      // scheduled playback to finish.
+      _tailGraceActive = true;
+      _tailTurnComplete = false;
+      _tailLastAudioMicros = _monotonicMicros();
       final Stopwatch stopwatch = Stopwatch()..start();
       while (!_tailTurnComplete && stopwatch.elapsed < _tailGraceCap) {
         final int sinceLastAudio = _monotonicMicros() - _tailLastAudioMicros;
@@ -2020,54 +2047,32 @@ class ConversationController extends ChangeNotifier {
         }
         await Future<void>.delayed(const Duration(milliseconds: 100));
       }
+      _tailGraceActive = false;
+      if (generation != _playbackGeneration) {
+        return;
+      }
+      final int backlogMicros =
+          math.max(0, _scheduledPlaybackEndMicros - _monotonicMicros());
+      final Duration backlog = Duration(microseconds: backlogMicros);
+      Duration wait = backlog + tailPlaybackMargin;
+      if (wait > _tailDrainCapMax) {
+        wait = _tailDrainCapMax;
+      }
+      await Future<void>.delayed(wait);
     } finally {
       _tailGraceActive = false;
+      _tailPlaybackActive = false;
+      if (generation == _playbackGeneration) {
+        _clearAllSentencePlayback();
+        _invalidatePlaybackOperations();
+        await _closeSessionsBestEffort();
+        await _runAuthoritativeCleanup(_releasePlayback);
+      }
     }
-    // The model streams faster than real time, so the queued backlog can be
-    // several seconds long; wait for the scheduled playback end (plus margin)
-    // instead of a fixed short cap that would cut the tail off.
-    final int backlogMicros =
-        math.max(0, _scheduledPlaybackEndMicros - _monotonicMicros());
-    final Duration backlog = Duration(microseconds: backlogMicros);
-    Duration cap = backlog + const Duration(seconds: 5);
-    if (cap > _tailDrainCapMax) {
-      cap = _tailDrainCapMax;
-    }
-    await _drainPendingPlayback(hardCap: cap);
   }
 
   static const Duration _tailGraceCap = Duration(seconds: 15);
   static const Duration _tailDrainCapMax = Duration(seconds: 30);
-  static const Duration _chainSettleTimeout = Duration(seconds: 2);
-
-  /// Waits for the enqueue chain to settle and for every queued plus
-  /// written-but-inaudible byte to play out. Bounded by [hardCap] when set;
-  /// otherwise runs until [shouldContinue] turns false (finite audio).
-  Future<void> _drainPendingPlayback({
-    bool Function()? shouldContinue,
-    Duration? hardCap,
-  }) async {
-    try {
-      await _waitForPlayback().timeout(hardCap ?? _chainSettleTimeout);
-    } catch (_) {
-      // A stuck enqueue chain must not delay the authoritative teardown.
-    }
-    final Stopwatch stopwatch = Stopwatch()..start();
-    while (hardCap == null || stopwatch.elapsed < hardCap) {
-      if (shouldContinue != null && !shouldContinue()) {
-        return;
-      }
-      try {
-        final PcmPlaybackMetrics metrics = await _playback.metrics();
-        if (metrics.pendingPlaybackBytes <= 0) {
-          return;
-        }
-      } catch (_) {
-        return;
-      }
-      await Future<void>.delayed(const Duration(milliseconds: 100));
-    }
-  }
 
   void _terminateConversation(
     String message, {
