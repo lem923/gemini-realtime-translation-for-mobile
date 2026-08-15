@@ -661,6 +661,131 @@ void main() {
   );
 
   test(
+    'sentence mode keeps buffered and tail audio in one backpressured FIFO',
+    () async {
+      int nowMicros = 0;
+      final Completer<void> enqueueGate = Completer<void>();
+      final _FakeAudioCapture capture = _FakeAudioCapture();
+      final _FakePlayback playback = _FakePlayback(enqueueGate: enqueueGate);
+      final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
+      final ConversationController controller = ConversationController(
+        keyStore: _MemoryKeyStore('stored-key'),
+        audioCapture: capture,
+        playback: playback,
+        headsetCapture: _FakeHeadsetCapture(),
+        monotonicMicros: () => nowMicros,
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) {
+              final _FakeLiveSession session = _FakeLiveSession();
+              sessions.add(session);
+              return session;
+            },
+      );
+
+      await controller.initialize();
+      controller.setMode(ConversationMode.sentenceBySentence);
+      await controller.startConversation();
+
+      controller.startUtterance();
+      capture.emit(_speechChunk());
+      capture.emit(_speechChunk());
+      await _flushEvents();
+      final _FakeLiveSession session = sessions.first;
+      session
+        ..emit(LiveAudioChunk(_translatedChunk(1)))
+        ..emit(LiveAudioChunk(_translatedChunk(2)));
+      controller.endUtterance();
+      await _flushEvents();
+      expect(playback.enqueued, hasLength(1));
+
+      // These chunks arrive after release while the first native enqueue is
+      // backpressured. They must stay in the sentence FIFO instead of being
+      // appended ahead of the remaining buffered audio on the Dart chain.
+      session
+        ..emit(LiveAudioChunk(_translatedChunk(3)))
+        ..emit(LiveAudioChunk(_translatedChunk(4)));
+      await _flushEvents();
+      final ConversationDiagnostics blocked = await controller
+          .collectDiagnostics();
+      expect(playback.enqueued, hasLength(1));
+      expect(blocked.maximumScheduledPlaybackMilliseconds, 100);
+
+      enqueueGate.complete();
+      await _flushEvents();
+      await _flushEvents();
+      expect(playback.enqueued.map((List<int> chunk) => chunk.first), <int>[
+        1,
+        2,
+        3,
+        4,
+      ]);
+
+      nowMicros = 100000;
+      await controller.stopConversation();
+      controller.dispose();
+    },
+  );
+
+  test(
+    'new sentence stays buffered while the previous drain settles',
+    () async {
+      final Completer<void> enqueueGate = Completer<void>();
+      final _FakeAudioCapture capture = _FakeAudioCapture();
+      final _FakePlayback playback = _FakePlayback(enqueueGate: enqueueGate);
+      final List<_FakeLiveSession> sessions = <_FakeLiveSession>[];
+      final ConversationController controller = ConversationController(
+        keyStore: _MemoryKeyStore('stored-key'),
+        audioCapture: capture,
+        playback: playback,
+        headsetCapture: _FakeHeadsetCapture(),
+        sessionFactory:
+            ({required String apiKey, required String targetLanguageCode}) {
+              final _FakeLiveSession session = _FakeLiveSession();
+              sessions.add(session);
+              return session;
+            },
+      );
+
+      await controller.initialize();
+      controller.setMode(ConversationMode.sentenceBySentence);
+      await controller.startConversation();
+      final _FakeLiveSession session = sessions.first;
+
+      controller.startUtterance();
+      capture.emit(_speechChunk());
+      capture.emit(_speechChunk());
+      session.emit(LiveAudioChunk(_translatedChunk(1)));
+      controller.endUtterance();
+      await _flushEvents();
+      expect(playback.enqueued, hasLength(1));
+
+      controller.startUtterance();
+      capture.emit(_speechChunk());
+      capture.emit(_speechChunk());
+      session.emit(LiveAudioChunk(_translatedChunk(2)));
+      await _flushEvents();
+
+      enqueueGate.complete();
+      await _flushEvents();
+      await _flushEvents();
+      // Releasing native backpressure from the previous sentence must not let
+      // its old drain consume the new sentence while the button is held.
+      expect(playback.enqueued, hasLength(1));
+
+      controller.endUtterance();
+      await _flushEvents();
+      await _flushEvents();
+      expect(playback.enqueued.map((List<int> chunk) => chunk.first), <int>[
+        1,
+        2,
+      ]);
+
+      await controller.stopConversation();
+      controller.dispose();
+    },
+  );
+
+  test(
     'manual speaker switch commits output without a server turn-complete event',
     () async {
       final _FakeAudioCapture capture = _FakeAudioCapture();
@@ -2855,6 +2980,9 @@ Uint8List _speechChunk() {
 }
 
 Uint8List _silenceChunk() => Uint8List(inputChunkBytes);
+
+Uint8List _translatedChunk(int marker) =>
+    Uint8List.fromList(List<int>.filled(4800, marker));
 
 Future<void> _flushEvents() => Future<void>.delayed(Duration.zero);
 

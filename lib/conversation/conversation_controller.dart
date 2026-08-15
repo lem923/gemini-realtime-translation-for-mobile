@@ -1180,13 +1180,15 @@ class ConversationController extends ChangeNotifier {
     }
     _sentencePlaybackDraining[side] = true;
     try {
-      while (!_disposed && !_playbackFailureReported) {
+      while (!_disposed &&
+          !_playbackFailureReported &&
+          _sentencePlaybackFinalized[side] == true) {
         final List<Uint8List> chunks = _sentencePlaybackChunks[side]!;
         if (chunks.isEmpty) {
           // A tail chunk may arrive right at the boundary; yield once so a
           // late `_bufferSentenceAudio` can enqueue before we exit.
           await Future<void>.delayed(Duration.zero);
-          if (chunks.isEmpty) {
+          if (chunks.isEmpty || _sentencePlaybackFinalized[side] != true) {
             break;
           }
         }
@@ -2021,11 +2023,21 @@ class ConversationController extends ChangeNotifier {
     } finally {
       _tailGraceActive = false;
     }
-    await _drainPendingPlayback(hardCap: _tailDrainCap);
+    // The model streams faster than real time, so the queued backlog can be
+    // several seconds long; wait for the scheduled playback end (plus margin)
+    // instead of a fixed short cap that would cut the tail off.
+    final int backlogMicros =
+        math.max(0, _scheduledPlaybackEndMicros - _monotonicMicros());
+    final Duration backlog = Duration(microseconds: backlogMicros);
+    Duration cap = backlog + const Duration(seconds: 5);
+    if (cap > _tailDrainCapMax) {
+      cap = _tailDrainCapMax;
+    }
+    await _drainPendingPlayback(hardCap: cap);
   }
 
   static const Duration _tailGraceCap = Duration(seconds: 15);
-  static const Duration _tailDrainCap = Duration(seconds: 3);
+  static const Duration _tailDrainCapMax = Duration(seconds: 30);
   static const Duration _chainSettleTimeout = Duration(seconds: 2);
 
   /// Waits for the enqueue chain to settle and for every queued plus
@@ -2036,7 +2048,7 @@ class ConversationController extends ChangeNotifier {
     Duration? hardCap,
   }) async {
     try {
-      await _waitForPlayback().timeout(_chainSettleTimeout);
+      await _waitForPlayback().timeout(hardCap ?? _chainSettleTimeout);
     } catch (_) {
       // A stuck enqueue chain must not delay the authoritative teardown.
     }
